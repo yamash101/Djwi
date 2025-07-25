@@ -1,1321 +1,1378 @@
-import React, { useState, useEffect, useRef, createContext, useContext } from 'react';
-// Firebase SDKs are loaded via CDN for simplicity in a single-file React app
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
-import { getAuth, signInAnonymously, signInWithCustomToken, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-import { getFirestore, doc, getDoc, setDoc, onSnapshot, collection, query } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>بورصة المتداول العربي (تجريبية)</title>
+    <!-- Google Font - Inter for modern look -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Babel CDN for JSX transformation in browser (for development/demo only) -->
+    <!-- هذا السطر ضروري لتحويل كود JSX إلى JavaScript يفهمه المتصفح مباشرة -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- React & ReactDOM CDN -->
+    <!-- هذه المكتبات ضرورية لتشغيل React في المتصفح -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Firebase CDN -->
+    <!-- مكتبات Firebase الضرورية -->
+    <script type="module" src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js"></script>
+    <script type="module" src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js"></script>
+    <script type="module" src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js"></script>
 
-// AppContext: Context to provide Firebase instances and utility functions to child components
-// هذا السياق يسمح للمكونات الفرعية بالوصول إلى كائنات Firebase (قاعدة البيانات والمصادقة) ووظائف مثل عرض الرسائل وتنسيق الأرقام.
-const AppContext = createContext();
+    <!-- Global Firebase Config (for Canvas environment) -->
+    <!-- هذه المتغيرات سيتم توفيرها من بيئة Canvas. لا تقم بتعديلها يدوياً عند النشر. -->
+    <script>
+      const __app_id = "default-app-id"; // سيتم توفيرها بواسطة Canvas
+      const __firebase_config = JSON.stringify({
+          apiKey: "YOUR_API_KEY", // استبدل بـ مفتاح Firebase API الخاص بك
+          authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+          projectId: "YOUR_PROJECT_ID",
+          storageBucket: "YOUR_PROJECT_ID.appspot.com",
+          messagingSenderId: "YOUR_SENDER_ID",
+          appId: "YOUR_APP_ID"
+      });
+      const __initial_auth_token = ""; // سيتم توفيرها بواسطة Canvas
+    </script>
 
-// -----------------------------------------------------------------------------
-// App Component (المكون الرئيسي للتطبيق)
-// يدير الحالة العامة للتطبيق، تهيئة Firebase، التنقل بين الصفحات، ووظائف التداول الأساسية.
-// -----------------------------------------------------------------------------
-const App = () => {
-  // Firebase Auth and Firestore instances and user ID
-  const [db, setDb] = useState(null); // كائن قاعدة البيانات Firestore
-  const [auth, setAuth] = useState(null); // كائن المصادقة Auth
-  const [userId, setUserId] = useState(null); // مُعرّف المستخدم الحالي
-  const [isAuthReady, setIsAuthReady] = useState(false); // لتتبع ما إذا كانت المصادقة جاهزة
+    <style>
+      /* Custom CSS for glowing effects or specific element styles */
+      /* يمكنك إضافة أي تنسيقات CSS إضافية هنا */
+      body {
+        font-family: 'Inter', sans-serif;
+      }
+      /* Animation for glowing buttons (example) */
+      .glow-on-hover:hover {
+        box-shadow: 0 0 10px rgba(0, 123, 255, 0.7), 0 0 20px rgba(0, 123, 255, 0.5), 0 0 30px rgba(0, 123, 255, 0.3);
+      }
+      /* Custom styles for tables/overflow */
+      .overflow-x-auto {
+        -webkit-overflow-scrolling: touch; /* For smoother scrolling on iOS */
+      }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div id="root"></div>
 
-  // Application-specific state
-  const [currentPage, setCurrentPage] = useState('auth'); // الصفحة الحالية المعروضة
-  const [balance, setBalance] = useState(0); // الرصيد الافتراضي للمستخدم (يتم تحميله من Firestore)
-  const [portfolio, setPortfolio] = useState({}); // المحفظة الافتراضية للمستخدم (يتم تحميلها من Firestore)
-  const [transactions, setTransactions] = useState([]); // سجل العمليات (يتم تحميله من Firestore)
-  const [marketData, setMarketData] = useState({}); // بيانات أسعار السوق الحالية (محاكاة)
-  const [message, setMessage] = useState({ text: '', type: '' }); // الرسائل التي تظهر للمستخدم (نجاح/خطأ)
+    <!-- Your React Component Code -->
+    <!-- يجب أن يكون هذا السكريبت من نوع "text/babel" ليتم تحويله بواسطة Babel -->
+    <script type="text/babel">
+        // Import React, useState, useEffect, useRef, createContext, useContext here if not using CDN bundles that make them global
+        // If using the UMD builds of React (as linked above), React, ReactDOM, etc., are global objects.
 
-  // useRef to keep track of the last known prices to calculate price change percentage
-  // هذا المرجع يساعد في حساب نسبة التغير في الأسعار بين التحديثات.
-  const assetPricesRef = useRef({
-    'أسهم شركة النور': 100.00,
-    'النفط الخام الافتراضي': 75.00,
-    'اليورو/الدولار الأمريكي': 1.0800,
-    'الذهب الافتراضي (أونصة)': 1800.00,
-    'عملة البيتكوين الرقمية': 65000.00,
-    'أسهم شركة التقنية': 150.00,
-    'الغاز الطبيعي الافتراضي': 2.50,
-    'الجنيه الإسترليني/الين الياباني': 185.00,
-    'الفضة الافتراضية (أونصة)': 22.00,
-    'عملة الإيثيريوم الرقمية': 3500.00,
-  });
+        // Context for Auth and Firestore instances
+        const AppContext = React.createContext();
 
-  // Helper function to format numbers to Arabic locale
-  // دالة مساعدة لتنسيق الأرقام لعرضها باللغة العربية.
-  const formatNumber = (num) => {
-    if (num === null || num === undefined) return '0.00';
-    return num.toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  };
+        // -----------------------------------------------------------------------------
+        // App Component (المكون الرئيسي للتطبيق)
+        // يدير الحالة العامة للتطبيق، تهيئة Firebase، التنقل بين الصفحات، ووظائف التداول الأساسية.
+        // -----------------------------------------------------------------------------
+        const App = () => {
+          // Firebase Auth and Firestore instances and user ID
+          const [db, setDb] = React.useState(null); // كائن قاعدة البيانات Firestore
+          const [auth, setAuth] = React.useState(null); // كائن المصادقة Auth
+          const [userId, setUserId] = React.useState(null); // مُعرّف المستخدم الحالي
+          const [isAuthReady, setIsAuthReady] = React.useState(false); // لتتبع ما إذا كانت المصادقة جاهزة
 
-  // Function to show a temporary message (success/error) to the user
-  // دالة لعرض رسالة مؤقتة للمستخدم (نجاح أو خطأ).
-  const showMessage = (text, type) => {
-    setMessage({ text, type });
-    setTimeout(() => setMessage({ text: '', type: '' }), 3000); // تختفي الرسالة بعد 3 ثواني
-  };
+          // Application-specific state
+          const [currentPage, setCurrentPage] = React.useState('auth'); // الصفحة الحالية المعروضة
+          const [balance, setBalance] = React.useState(0); // الرصيد الافتراضي للمستخدم (يتم تحميله من Firestore)
+          const [portfolio, setPortfolio] = React.useState({}); // المحفظة الافتراضية للمستخدم (يتم تحميلها من Firestore)
+          const [transactions, setTransactions] = React.useState([]); // سجل العمليات (يتم تحميله من Firestore)
+          const [marketData, setMarketData] = React.useState({}); // بيانات أسعار السوق الحالية (محاكاة)
+          const [message, setMessage] = React.useState({ text: '', type: '' }); // الرسائل التي تظهر للمستخدم (نجاح/خطأ)
 
-  // --- useEffect hook for Firebase Initialization and Authentication Listener ---
-  // يتم تشغيل هذا الكود مرة واحدة عند تحميل التطبيق لتهيئة Firebase ومراقبة حالة المصادقة.
-  useEffect(() => {
-    // __app_id and __firebase_config are global variables provided by the Canvas environment
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+          // useRef to keep track of the last known prices to calculate price change percentage
+          // هذا المرجع يساعد في حساب نسبة التغير في الأسعار بين التحديثات.
+          const assetPricesRef = React.useRef({
+            'أسهم شركة النور': 100.00,
+            'النفط الخام الافتراضي': 75.00,
+            'اليورو/الدولار الأمريكي': 1.0800,
+            'الذهب الافتراضي (أونصة)': 1800.00,
+            'عملة البيتكوين الرقمية': 65000.00,
+            'أسهم شركة التقنية': 150.00,
+            'الغاز الطبيعي الافتراضي': 2.50,
+            'الجنيه الإسترليني/الين الياباني': 185.00,
+            'الفضة الافتراضية (أونصة)': 22.00,
+            'عملة الإيثيريوم الرقمية': 3500.00,
+          });
 
-    try {
-      const app = initializeApp(firebaseConfig);
-      const firestore = getFirestore(app);
-      const authentication = getAuth(app);
+          // Helper function to format numbers to Arabic locale
+          // دالة مساعدة لتنسيق الأرقام لعرضها باللغة العربية.
+          const formatNumber = (num) => {
+            if (num === null || num === undefined) return '0.00';
+            return num.toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+          };
 
-      setDb(firestore);
-      setAuth(authentication);
+          // Function to show a temporary message (success/error) to the user
+          // دالة لعرض رسالة مؤقتة للمستخدم (نجاح أو خطأ).
+          const showMessage = (text, type) => {
+            setMessage({ text, type });
+            setTimeout(() => setMessage({ text: '', type: '' }), 3000); // تختفي الرسالة بعد 3 ثواني
+          };
 
-      // Listen for authentication state changes
-      // عند تغيير حالة المصادقة (تسجيل دخول/خروج)، يتم تحديث مُعرّف المستخدم والحالة.
-      const unsubscribe = onAuthStateChanged(authentication, async (user) => {
-        if (user) {
-          setUserId(user.uid);
-          // Check if user data exists in Firestore, if not, initialize it
-          const userDocRef = doc(firestore, `artifacts/${appId}/users/${user.uid}/tradingData/account`);
-          const userDocSnap = await getDoc(userDocRef);
-          if (!userDocSnap.exists() || userDocSnap.data().balance === undefined) {
-            // Initialize new user's trading data with default values
-            await setDoc(userDocRef, {
-              balance: 0, // يبدأ المستخدم برصيد صفر ويجب عليه "إيداع" الأموال بنفسه
-              portfolio: {},
-              transactions: [],
-              lastLogin: new Date().toISOString()
+          // --- useEffect hook for Firebase Initialization and Authentication Listener ---
+          // يتم تشغيل هذا الكود مرة واحدة عند تحميل التطبيق لتهيئة Firebase ومراقبة حالة المصادقة.
+          React.useEffect(() => {
+            // __app_id and __firebase_config are global variables provided by the Canvas environment
+            // هذه المتغيرات سيتم توفيرها من بيئة Canvas (إذا كنت تشغلها هناك)
+            // وإلا، ستحتاج إلى إعداد Firebase يدوياً أو استخدام المفاتيح الخاصة بك.
+            // تأكد من استبدال 'YOUR_API_KEY' وما إلى ذلك بمعلومات مشروع Firebase الفعلية عند النشر.
+            const firebaseApp = firebase.initializeApp(JSON.parse(__firebase_config));
+            const firestore = firebase.firestore(firebaseApp);
+            const authentication = firebase.auth(firebaseApp);
+
+
+            setDb(firestore);
+            setAuth(authentication);
+
+            // Listen for authentication state changes
+            // عند تغيير حالة المصادقة (تسجيل دخول/خروج)، يتم تحديث مُعرّف المستخدم والحالة.
+            const unsubscribe = authentication.onAuthStateChanged(async (user) => {
+              if (user) {
+                setUserId(user.uid);
+                // Check if user data exists in Firestore, if not, initialize it
+                const userDocRef = firestore.doc(`artifacts/${__app_id}/users/${user.uid}/tradingData/account`);
+                const userDocSnap = await userDocRef.get();
+                if (!userDocSnap.exists || userDocSnap.data().balance === undefined) {
+                  // Initialize new user's trading data with default values
+                  await userDocRef.set({
+                    balance: 0, // يبدأ المستخدم برصيد صفر ويجب عليه "إيداع" الأموال بنفسه
+                    portfolio: {},
+                    transactions: [],
+                    lastLogin: new Date().toISOString()
+                  });
+                  setCurrentPage('accountSetup'); // توجيه المستخدم لصفحة إعداد الحساب الجديدة
+                } else {
+                  setCurrentPage('dashboard'); // Redirect to dashboard if data exists
+                }
+              } else {
+                setUserId(null);
+                setCurrentPage('auth'); // Go back to auth if logged out
+              }
+              setIsAuthReady(true); // تأكيد أن المصادقة جاهزة
             });
-            setCurrentPage('accountSetup'); // توجيه المستخدم لصفحة إعداد الحساب الجديدة
-          } else {
-            setCurrentPage('dashboard'); // Redirect to dashboard if data exists
-          }
-        } else {
-          setUserId(null);
-          setCurrentPage('auth'); // Go back to auth if logged out
-        }
-        setIsAuthReady(true); // تأكيد أن المصادقة جاهزة
-      });
 
-      // Attempt to sign in with custom token provided by Canvas environment
-      // محاولة تسجيل الدخول باستخدام توكن مخصص (إذا توفر من بيئة Canvas)
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        signInWithCustomToken(authentication, __initial_auth_token).catch(err => {
-          console.error("Custom token sign-in failed, falling back to anonymous:", err);
-          signInAnonymously(authentication).catch(err => console.error("Anonymous sign-in failed:", err));
-        });
-      } else {
-        // Fallback to anonymous sign-in if no custom token (e.g., local development)
-        signInAnonymously(authentication).catch(err => console.error("Anonymous sign-in failed:", err));
-      }
-
-      return () => unsubscribe(); // Cleanup auth listener on component unmount
-    } catch (e) {
-      console.error("Failed to initialize Firebase:", e);
-      showMessage("خطأ في تهيئة النظام. يرجى المحاولة لاحقاً.", "error");
-    }
-  }, []);
-
-  // --- useEffect hook for Firestore Data Listener ---
-  // يستمع هذا الكود للتغييرات في بيانات المستخدم في Firestore ويحدث حالة التطبيق.
-  useEffect(() => {
-    if (!db || !userId) return; // لا تعمل إلا إذا كانت قاعدة البيانات ومعرف المستخدم متاحين
-
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-    const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/tradingData/account`);
-
-    // Listen for real-time updates to user's trading data
-    const unsubscribe = onSnapshot(userDocRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setBalance(data.balance || 0); // تحديث الرصيد
-        setPortfolio(data.portfolio || {}); // تحديث المحفظة
-        setTransactions(data.transactions || []); // تحديث سجل العمليات
-      } else {
-        console.warn("User data document does not exist for current user. This should be initialized during auth.");
-      }
-    }, (error) => {
-      console.error("Error listening to user data:", error);
-      showMessage("خطأ في تحديث البيانات. يرجى التحقق من اتصالك.", "error");
-    });
-
-    return () => unsubscribe(); // Cleanup snapshot listener on component unmount
-  }, [db, userId]); // يعتمد على كائن db ومعرف المستخدم
-
-  // --- useEffect hook for Market Data Simulation ---
-  // يقوم بمحاكاة تحديثات أسعار السوق بشكل دوري (كل 2 ثانية).
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const newPrices = {};
-      for (const asset in assetPricesRef.current) {
-        // Simulate random fluctuation, higher volatility for crypto
-        const volatilityFactor = (asset.includes('الرقمية') || asset.includes('البيتكوين') || asset.includes('الإيثيريوم')) ? 0.025 : 0.015;
-        const fluctuation = (Math.random() * 2 - 1) * volatilityFactor * assetPricesRef.current[asset];
-        newPrices[asset] = parseFloat((assetPricesRef.current[asset] + fluctuation).toFixed(asset.includes('الدولار') || asset.includes('الين') ? 4 : 2));
-        if (newPrices[asset] <= 0.01) newPrices[asset] = 0.01; // Prevent price from going too low
-      }
-      assetPricesRef.current = newPrices; // تحديث المرجع بآخر الأسعار
-      setMarketData(newPrices); // تحديث حالة بيانات السوق
-    }, 2000); // تحديث كل 2 ثانية
-
-    setMarketData(assetPricesRef.current); // Initial set of market data on first render
-
-    return () => clearInterval(interval); // تنظيف المؤقت عند إزالة المكون
-  }, []);
-
-  // --- Trading Functions (وظائف التداول) ---
-  // دالة مساعدة لتحديث بيانات المستخدم في Firestore بعد أي عملية تداول أو إيداع.
-  const updateFirestoreUserData = async (newBalance, newPortfolio, newTransactions) => {
-    if (!db || !userId) {
-      showMessage("خطأ: لا يمكن تحديث البيانات. لم يتم تسجيل الدخول.", "error");
-      return false;
-    }
-    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-    const userDocRef = doc(db, `artifacts/${appId}/users/${userId}/tradingData/account`);
-    try {
-      await setDoc(userDocRef, {
-        balance: newBalance,
-        portfolio: newPortfolio,
-        transactions: newTransactions,
-        lastUpdate: new Date().toISOString() // إضافة ختم زمني لآخر تحديث
-      });
-      return true;
-    } catch (e) {
-      console.error("Error updating user data in Firestore:", e);
-      showMessage("حدث خطأ أثناء حفظ بيانات التداول. يرجى المحاولة مرة أخرى.", "error");
-      return false;
-    }
-  };
-
-  // معالجة عملية الشراء: تحديث الرصيد، المحفظة، وسجل العمليات.
-  const handleBuy = async (asset, quantity) => {
-    const currentPrice = marketData[asset];
-    const cost = currentPrice * quantity;
-
-    if (balance >= cost) {
-      const newBalance = parseFloat((balance - cost).toFixed(2));
-      const currentHolding = portfolio[asset] || { quantity: 0, totalCost: 0, avgPrice: 0 };
-      const newQuantity = currentHolding.quantity + quantity;
-      const newTotalCost = currentHolding.totalCost + cost;
-      const newAvgPrice = parseFloat((newTotalCost / newQuantity).toFixed(2));
-
-      const newPortfolio = {
-        ...portfolio,
-        [asset]: { quantity: newQuantity, avgPrice: newAvgPrice, totalCost: newTotalCost }
-      };
-
-      const newTransactions = [
-        ...transactions,
-        { type: 'شراء', asset, quantity, price: currentPrice, timestamp: new Date().toLocaleString() }
-      ];
-
-      const success = await updateFirestoreUserData(newBalance, newPortfolio, newTransactions);
-      if (success) {
-        showMessage(`تم شراء ${quantity} من ${asset} بنجاح!`, 'success');
-      }
-    } else {
-      showMessage('رصيدك الافتراضي غير كافٍ لإتمام عملية الشراء.', 'error');
-    }
-  };
-
-  // معالجة عملية البيع: تحديث الرصيد، المحفظة، وسجل العمليات.
-  const handleSell = async (asset, quantity) => {
-    const currentPrice = marketData[asset];
-    const holding = portfolio[asset];
-
-    if (holding && holding.quantity >= quantity) {
-      const revenue = currentPrice * quantity;
-      const newBalance = parseFloat((balance + revenue).toFixed(2));
-
-      const newQuantity = holding.quantity - quantity;
-      let newPortfolio;
-      if (newQuantity <= 0) {
-        newPortfolio = { ...portfolio };
-        delete newPortfolio[asset]; // إزالة الأصل من المحفظة إذا تم بيع الكمية كلها
-      } else {
-        const newTotalCost = holding.totalCost - (holding.avgPrice * quantity);
-        newPortfolio = {
-          ...portfolio,
-          [asset]: { quantity: newQuantity, avgPrice: parseFloat((newTotalCost / newQuantity).toFixed(2)), totalCost: newTotalCost }
-        };
-      }
-
-      const newTransactions = [
-        ...transactions,
-        { type: 'بيع', asset, quantity, price: currentPrice, timestamp: new Date().toLocaleString() }
-      ];
-
-      const success = await updateFirestoreUserData(newBalance, newPortfolio, newTransactions);
-      if (success) {
-        showMessage(`تم بيع ${quantity} من ${asset} بنجاح!`, 'success');
-      }
-    } else {
-      showMessage('ليس لديك كمية كافية من هذا الأصل للبيع.', 'error');
-    }
-  };
-
-  // --- Rendering Logic based on currentPage (منطق عرض الصفحات) ---
-  const renderPage = () => {
-    // عرض رسالة تحميل بينما يتم التحقق من حالة المصادقة الأولية
-    if (!isAuthReady) {
-      return (
-        <div className="flex justify-center items-center h-64">
-          <p className="text-xl text-gray-700">جاري تحميل النظام...</p>
-        </div>
-      );
-    }
-
-    // عرض صفحة المصادقة إذا لم يتم تسجيل الدخول
-    if (currentPage === 'auth') {
-      return <AuthPage auth={auth} showMessage={showMessage} setCurrentPage={setCurrentPage} />;
-    }
-
-    // بمجرد المصادقة، يتم توفير السياق للمكونات الفرعية
-    return (
-      <AppContext.Provider value={{ db, auth, userId, showMessage, formatNumber }}>
-        {currentPage === 'accountSetup' && <AccountSetup setCurrentPage={setCurrentPage} />}
-        {currentPage === 'deposit' && (
-          <DepositFunds
-            balance={balance}
-            userId={userId}
-            db={db}
-            showMessage={showMessage}
-            updateFirestoreUserData={updateFirestoreUserData}
-            transactions={transactions}
-          />
-        )}
-        {currentPage === 'dashboard' && (
-          <Dashboard
-            balance={balance}
-            portfolio={portfolio}
-            marketData={marketData}
-            transactions={transactions}
-            onTradeClick={() => setCurrentPage('trade')}
-            setCurrentPage={setCurrentPage}
-            assetPricesRef={assetPricesRef}
-          />
-        )}
-        {currentPage === 'markets' && <Markets marketData={marketData} assetPricesRef={assetPricesRef} />}
-        {currentPage === 'trade' && (
-          <Trade
-            marketData={marketData}
-            onBuy={handleBuy}
-            onSell={handleSell}
-            balance={balance}
-            portfolio={portfolio}
-            showMessage={showMessage}
-          />
-        )}
-        {currentPage === 'learn' && <Learn />}
-      </AppContext.Provider>
-    );
-  };
-
-  return (
-    <div dir="rtl" className="min-h-screen bg-gray-100 font-inter flex flex-col items-center p-4 sm:p-6 md:p-8">
-      {/* Meta for responsive design */}
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      {/* Google Font - Inter for modern look */}
-      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
-      {/* Tailwind CSS CDN */}
-      <script src="https://cdn.tailwindcss.com"></script>
-
-      {/* Header and Navigation (Visible only after authentication) */}
-      {userId && (
-        <div className="w-full max-w-6xl bg-white p-4 sm:p-6 rounded-xl shadow-lg mb-6 flex flex-col sm:flex-row justify-between items-center gap-4">
-          <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-blue-700 whitespace-nowrap">
-            بورصة المتداول العربي <span className="text-gray-500 text-xl">(تجريبية)</span>
-          </h1>
-          <nav className="flex flex-wrap justify-center gap-2 sm:gap-4 md:gap-6 mt-4 sm:mt-0">
-            <button
-              onClick={() => setCurrentPage('dashboard')}
-              className={`px-4 py-2 rounded-lg font-medium text-lg transition-all duration-300 transform hover:scale-105 ${currentPage === 'dashboard' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'}`}
-            >
-              اللوحة الرئيسية
-            </button>
-            <button
-              onClick={() => setCurrentPage('markets')}
-              className={`px-4 py-2 rounded-lg font-medium text-lg transition-all duration-300 transform hover:scale-105 ${currentPage === 'markets' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'}`}
-            >
-              الأسواق
-            </button>
-            <button
-              onClick={() => setCurrentPage('trade')}
-              className={`px-4 py-2 rounded-lg font-medium text-lg transition-all duration-300 transform hover:scale-105 ${currentPage === 'trade' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'}`}
-            >
-              التداول
-            </button>
-            <button
-              onClick={() => setCurrentPage('learn')}
-              className={`px-4 py-2 rounded-lg font-medium text-lg transition-all duration-300 transform hover:scale-105 ${currentPage === 'learn' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'}`}
-            >
-              تعلم التداول
-            </button>
-             <button
-              onClick={async () => { await signOut(auth); showMessage('تم تسجيل الخروج بنجاح.', 'success'); }}
-              className="px-4 py-2 rounded-lg font-medium text-lg bg-red-500 text-white hover:bg-red-600 transition-all duration-300 transform hover:scale-105 shadow-md"
-            >
-              تسجيل الخروج
-            </button>
-          </nav>
-        </div>
-      )}
-
-      {/* Message Display */}
-      {message.text && (
-        <div
-          className={`fixed top-4 left-1/2 -translate-x-1/2 p-3 sm:p-4 rounded-lg shadow-xl text-white z-50 transition-opacity duration-300 ${
-            message.type === 'success' ? 'bg-green-500' : 'bg-red-500'
-          } ${message.text ? 'opacity-100' : 'opacity-0'}`}
-          style={{ minWidth: '250px', textAlign: 'center' }}
-        >
-          {message.text}
-        </div>
-      )}
-
-      {/* Main Content Area */}
-      <div className="w-full max-w-6xl bg-white p-4 sm:p-6 md:p-8 rounded-xl shadow-lg">
-        {renderPage()}
-      </div>
-
-      {/* Footer */}
-      <div className="w-full max-w-6xl text-center text-gray-600 mt-8 p-4 border-t border-gray-200">
-        <p className="text-md">منصة تداول تجريبية تعليمية للمبتدئين العرب.</p>
-        <p className="text-sm mt-2">جميع الأسعار والأرباح/الخسائر افتراضية ولأغراض تعليمية فقط.</p>
-        <p className="text-xs mt-1">© 2024 بورصة المتداول العربي. كل الحقوق محفوظة.</p>
-      </div>
-    </div>
-  );
-};
-
-
-// -----------------------------------------------------------------------------
-// AuthPage Component (صفحة المصادقة: تسجيل الدخول/التسجيل)
-// -----------------------------------------------------------------------------
-const AuthPage = ({ auth, showMessage, setCurrentPage }) => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [isRegistering, setIsRegistering] = useState(false); // لتحديد ما إذا كانت العملية تسجيل أو تسجيل دخول
-  const [loading, setLoading] = useState(false); // حالة التحميل
-
-  // معالجة إرسال النموذج (تسجيل الدخول أو التسجيل)
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      if (isRegistering) {
-        await createUserWithEmailAndPassword(auth, email, password); // إنشاء مستخدم جديد
-        showMessage('تم التسجيل بنجاح! يمكنك الآن تسجيل الدخول.', 'success');
-        setEmail('');
-        setPassword('');
-        setIsRegistering(false); // التحول إلى وضع تسجيل الدخول بعد التسجيل
-      } else {
-        await signInWithEmailAndPassword(auth, email, password); // تسجيل دخول المستخدم
-        showMessage('تم تسجيل الدخول بنجاح!', 'success');
-      }
-    } catch (error) {
-      console.error("Auth error:", error);
-      let errorMessage = 'حدث خطأ. يرجى المحاولة مرة أخرى.';
-      // رسائل خطأ مخصصة بناءً على رمز الخطأ من Firebase
-      if (error.code === 'auth/email-already-in-use') {
-        errorMessage = 'هذا البريد الإلكتروني مستخدم بالفعل. يرجى تسجيل الدخول.';
-      } else if (error.code === 'auth/invalid-email') {
-        errorMessage = 'صيغة البريد الإلكتروني غير صحيحة.';
-      } else if (error.code === 'auth/weak-password') {
-        errorMessage = 'كلمة المرور ضعيفة جدًا (يجب أن تكون 6 أحرف على الأقل).';
-      } else if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
-        errorMessage = 'البريد الإلكتروني أو كلمة المرور غير صحيحة.';
-      } else if (error.code === 'auth/too-many-requests') {
-        errorMessage = 'تم حظر هذا الجهاز بسبب كثرة المحاولات الفاشلة. يرجى المحاولة لاحقاً.';
-      }
-      showMessage(errorMessage, 'error');
-    } finally {
-      setLoading(false); // إيقاف حالة التحميل
-    }
-  };
-
-  return (
-    <div className="flex flex-col items-center justify-center p-6 space-y-6">
-      <h2 className="text-3xl font-bold text-blue-700 mb-6">مرحباً بك في بورصة المتداول العربي</h2>
-      <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md">
-        <h3 className="text-2xl font-semibold text-gray-800 text-center mb-6">
-          {isRegistering ? 'تسجيل حساب جديد' : 'تسجيل الدخول'}
-        </h3>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="email" className="block text-gray-700 text-lg font-medium mb-2">البريد الإلكتروني:</label>
-            <input
-              type="email"
-              id="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-800"
-              required
-            />
-          </div>
-          <div>
-            <label htmlFor="password" className="block text-gray-700 text-lg font-medium mb-2">كلمة المرور:</label>
-            <input
-              type="password"
-              id="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-800"
-              required
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-blue-600 text-white p-4 rounded-xl font-bold text-xl hover:bg-blue-700 transition-all duration-300 shadow-md enabled:hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {loading ? 'جاري التحميل...' : (isRegistering ? 'تسجيل' : 'تسجيل الدخول')}
-          </button>
-        </form>
-        <p className="text-center text-gray-600 mt-6">
-          {isRegistering ? 'لديك حساب بالفعل؟' : 'ليس لديك حساب؟'}
-          <button
-            onClick={() => setIsRegistering(prev => !prev)}
-            className="text-blue-600 hover:underline font-semibold mr-2"
-          >
-            {isRegistering ? 'تسجيل الدخول' : 'سجل الآن'}
-          </button>
-        </p>
-      </div>
-    </div>
-  );
-};
-
-
-// -----------------------------------------------------------------------------
-// AccountSetup Component (محاكاة إعداد الحساب)
-// -----------------------------------------------------------------------------
-const AccountSetup = ({ setCurrentPage }) => {
-  const { showMessage } = useContext(AppContext);
-  const [accountType, setAccountType] = useState('');
-  const [leverage, setLeverage] = useState('');
-  const [agreedToTerms, setAgreedToTerms] = useState(false); // حالة الموافقة على الشروط
-  const [showTermsModal, setShowTermsModal] = useState(false); // حالة عرض نافذة الشروط
-
-  // معالجة اكتمال إعداد الحساب
-  const handleSetupComplete = () => {
-    if (!accountType || !leverage || !agreedToTerms) {
-      showMessage('الرجاء إكمال جميع الحقول والموافقة على الشروط.', 'error');
-      return;
-    }
-    showMessage('تم إعداد حسابك التجريبي بنجاح! يمكنك الآن إيداع الأموال لبدء التداول.', 'success');
-    setCurrentPage('deposit'); // الانتقال إلى صفحة الإيداع بعد الإعداد
-  };
-
-  return (
-    <div className="space-y-6 p-6">
-      <h2 className="text-3xl font-bold text-gray-800 border-b-2 border-blue-200 pb-4 mb-6 text-center">إعداد حسابك التجريبي</h2>
-
-      <p className="text-gray-700 leading-relaxed text-center mb-6">
-        لتعيش تجربة تداول واقعية، يرجى إكمال إعدادات حسابك التجريبي. هذه الخطوات تحاكي ما يحدث في منصات التداول الحقيقية.
-      </p>
-
-      <div className="bg-gray-50 p-6 rounded-xl shadow-md space-y-4">
-        <div>
-          <label htmlFor="account-type" className="block text-gray-700 text-lg font-medium mb-2">نوع الحساب الافتراضي:</label>
-          <select
-            id="account-type"
-            className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white shadow-sm text-gray-800"
-            value={accountType}
-            onChange={(e) => setAccountType(e.target.value)}
-            required
-          >
-            <option value="" disabled>اختر نوع الحساب...</option>
-            <option value="standard">قياسي (Standard)</option>
-            <option value="pro">احترافي (Pro)</option>
-            <option value="cent">حساب سنت (Cent)</option>
-          </select>
-          <p className="text-sm text-gray-500 mt-1">
-            في التداول الحقيقي، تختلف أنواع الحسابات في شروطها وعمولاتها. هنا، كلها لأغراض المحاكاة.
-          </p>
-        </div>
-
-        <div>
-          <label htmlFor="leverage" className="block text-gray-700 text-lg font-medium mb-2">الرافعة المالية الافتراضية:</label>
-          <select
-            id="leverage"
-            className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white shadow-sm text-gray-800"
-            value={leverage}
-            onChange={(e) => setLeverage(e.target.value)}
-            required
-          >
-            <option value="" disabled>اختر الرافعة المالية...</option>
-            <option value="1:50">1:50 (رافعة منخفضة)</option>
-            <option value="1:100">1:100 (رافعة متوسطة)</option>
-            <option value="1:500">1:500 (رافعة عالية)</option>
-          </select>
-          <div className="bg-red-50 border-r-4 border-red-500 text-red-800 p-4 rounded-lg mt-4" role="alert">
-            <p className="font-bold">تحذير مهم عن الرافعة المالية:</p>
-            <p className="text-sm mt-2">
-              في التداول الحقيقي، <strong className="text-red-700">الرافعة المالية تزيد من أرباحك وخسائرك بشكل كبير</strong>. يمكن أن تؤدي إلى خسارة رأس مالك بالكامل بسرعة. استخدمها بحذر شديد وفهم كامل لمخاطرها. هذه مجرد محاكاة.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center">
-          <input
-            type="checkbox"
-            id="agree-terms"
-            checked={agreedToTerms}
-            onChange={(e) => setAgreedToTerms(e.target.checked)}
-            className="h-5 w-5 text-blue-600 rounded focus:ring-blue-500 cursor-pointer"
-          />
-          <label htmlFor="agree-terms" className="mr-3 text-gray-700 text-lg cursor-pointer">
-            أوافق على <span className="text-blue-600 hover:underline cursor-pointer" onClick={() => setShowTermsModal(true)}>الشروط والأحكام الافتراضية</span>
-          </label>
-        </div>
-
-        <button
-          onClick={handleSetupComplete}
-          disabled={!accountType || !leverage || !agreedToTerms}
-          className="w-full bg-blue-600 text-white p-4 rounded-xl font-bold text-xl hover:bg-blue-700 transition-all duration-300 shadow-md enabled:hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          إعداد الحساب التجريبي
-        </button>
-      </div>
-
-      {/* Terms and Conditions Modal */}
-      {showTermsModal && (
-        <div className="fixed inset-0 bg-gray-600 bg-opacity-75 flex justify-center items-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <h3 className="text-2xl font-bold text-gray-800 mb-4">الشروط والأحكام الافتراضية</h3>
-            <div className="text-gray-700 text-sm leading-relaxed space-y-3">
-              <p>مرحباً بك في منصة التداول التجريبية. يرجى قراءة الشروط والأحكام التالية:</p>
-              <ul className="list-disc list-inside pr-4 space-y-2">
-                <li>هذه المنصة هي لأغراض تعليمية ومحاكاة فقط.</li>
-                <li>جميع الأموال والأرباح والخسائر المعروضة هي افتراضية ولا تمثل أي قيمة نقدية حقيقية.</li>
-                <li>الأهداف الرئيسية للمنصة هي مساعدتك على فهم آليات التداول، إدارة المخاطر، واستراتيجيات التداول.</li>
-                <li>الأسعار المعروضة هي أسعار محاكاة ولا تعكس الأسعار الحقيقية للأسواق المالية في الوقت الفعلي.</li>
-                <li>الاستخدام المستمر للمنصة يعني موافقتك على هذه الشروط.</li>
-                <li>لا نتحمل أي مسؤولية عن أي قرارات تداول حقيقية تتخذها بناءً على تجربتك في هذه المنصة التجريبية.</li>
-                <li><strong className="text-red-600">التداول الحقيقي ينطوي على مخاطر عالية وقد يؤدي إلى خسارة رأس المال بالكامل.</strong></li>
-                <li>الحسابات والبيانات الشخصية يتم التعامل معها بما يتماشى مع سياسة الخصوصية الافتراضية لهذه المنصة التعليمية.</li>
-                <li>وحدة قياس حركة السعر في أزواج العملات هي "النقطة" أو "بيب" (Pip). كل حركة سعرية صغيرة تعادل بيب واحد. في هذه المنصة التعليمية، ستتعلم كيف تؤثر حركة "البيبات" على ربحك أو خسارتك الافتراضية.</li>
-              </ul>
-              <p>بالموافقة على هذه الشروط، أنت تقر بأنك فهمت طبيعة المنصة التجريبية ومخاطر التداول الحقيقي.</p>
-            </div>
-            <button
-              onClick={() => setShowTermsModal(false)}
-              className="mt-6 w-full bg-blue-600 text-white p-3 rounded-lg font-bold hover:bg-blue-700 transition-colors"
-            >
-              إغلاق
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-
-// -----------------------------------------------------------------------------
-// DepositFunds Component (صفحة إيداع الأموال الافتراضية)
-// -----------------------------------------------------------------------------
-const DepositFunds = ({ balance, userId, db, showMessage, updateFirestoreUserData, transactions }) => {
-  const { formatNumber } = useContext(AppContext);
-  const [depositAmount, setDepositAmount] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  // معالجة عملية الإيداع الافتراضية
-  const handleDeposit = async () => {
-    const amount = parseFloat(depositAmount);
-    if (isNaN(amount) || amount <= 0) {
-      showMessage('الرجاء إدخال مبلغ إيداع صحيح وموجب.', 'error');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const newBalance = parseFloat((balance + amount).toFixed(2));
-      const newTransactions = [
-        ...transactions, // إضافة العملية الجديدة إلى سجل العمليات الحالي
-        { type: 'إيداع', asset: 'رصيد افتراضي', quantity: amount, price: 1, timestamp: new Date().toLocaleString() }
-      ];
-
-      // تحديث بيانات المستخدم في Firestore
-      const success = await updateFirestoreUserData(newBalance, {}, newTransactions); // المحفظة لا تتغير في عملية الإيداع
-      if (success) {
-        showMessage(`تم إيداع ${formatNumber(amount)}$ افتراضيًا بنجاح!`, 'success');
-        setDepositAmount(''); // مسح حقل الإيداع
-      }
-    } catch (e) {
-      showMessage('فشل الإيداع الافتراضي. يرجى المحاولة مرة أخرى.', 'error');
-      console.error("Deposit error:", e);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="space-y-6 p-6">
-      <h2 className="text-3xl font-bold text-gray-800 border-b-2 border-blue-200 pb-4 mb-6 text-center">إيداع الأموال الافتراضية</h2>
-
-      <div className="bg-gray-50 p-6 rounded-xl shadow-md space-y-4">
-        <p className="text-lg text-gray-700 mb-4 text-center">
-          رصيدك الافتراضي الحالي: <span className="font-extrabold text-blue-600 text-2xl">{formatNumber(balance)} $</span>
-        </p>
-
-        <div className="border border-blue-200 p-4 rounded-lg bg-blue-50 text-blue-800 text-center">
-          <p className="font-bold mb-2">كيف تعمل عملية الإيداع التجريبية؟</p>
-          <p className="text-sm">
-            هنا يمكنك إضافة أموال افتراضية إلى حسابك. هذه العملية تحاكي خطوات الإيداع في منصات التداول الحقيقية. لن يتم استخدام أي أموال حقيقية.
-          </p>
-        </div>
-
-        <div>
-          <label htmlFor="deposit-amount" className="block text-gray-700 text-lg font-medium mb-2">المبلغ المراد إيداعه (بالدولار الافتراضي):</label>
-          <input
-            type="number"
-            id="deposit-amount"
-            value={depositAmount}
-            onChange={(e) => setDepositAmount(e.target.value)}
-            placeholder="أدخل المبلغ"
-            className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm text-gray-800"
-            min="1"
-            step="1"
-            required
-          />
-        </div>
-
-        <div className="border border-gray-200 p-4 rounded-lg bg-white shadow-sm">
-          <h4 className="text-xl font-semibold text-gray-800 mb-2">طرق الإيداع الافتراضية:</h4>
-          <p className="text-gray-700 text-md">
-            (لأغراض المحاكاة، يمكنك اختيار طريقة):
-          </p>
-          <ul className="list-disc list-inside pr-4 mt-2 space-y-1">
-            <li>تحويل بنكي افتراضي</li>
-            <li>بطاقة ائتمان افتراضية</li>
-            <li>محفظة رقمية افتراضية</li>
-          </ul>
-          <p className="text-sm text-gray-500 mt-2">
-            في الواقع، ستكون هذه خيارات دفع حقيقية. هنا، تهدف فقط لفهم العملية.
-          </p>
-        </div>
-
-        <button
-          onClick={handleDeposit}
-          disabled={loading || parseFloat(depositAmount) <= 0 || isNaN(parseFloat(depositAmount))}
-          className="w-full bg-green-600 text-white p-4 rounded-xl font-bold text-xl hover:bg-green-700 transition-all duration-300 shadow-md enabled:hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {loading ? 'جاري الإيداع...' : 'إيداع الآن'}
-        </button>
-
-        <div className="bg-yellow-50 border-r-4 border-yellow-500 text-yellow-800 p-4 rounded-lg mt-4" role="alert">
-            <p className="font-bold">ملاحظة:</p>
-            <p className="text-sm mt-2">هذا إيداع أموال افتراضية فقط. لن يتم خصم أي أموال حقيقية منك. الهدف هو محاكاة تجربة الإيداع.</p>
-          </div>
-      </div>
-    </div>
-  );
-};
-
-
-// -----------------------------------------------------------------------------
-// Dashboard Component (اللوحة الرئيسية)
-// -----------------------------------------------------------------------------
-const Dashboard = ({ balance, portfolio, marketData, transactions, onTradeClick, setCurrentPage, assetPricesRef }) => {
-  const { formatNumber } = useContext(AppContext);
-
-  // حساب القيمة الإجمالية للمحفظة
-  const totalPortfolioValue = Object.keys(portfolio).reduce((sum, asset) => {
-    const holding = portfolio[asset];
-    const currentPrice = marketData[asset] || 0;
-    return sum + (holding.quantity * currentPrice);
-  }, 0) + balance;
-
-  // حساب الربح/الخسارة غير المحققة (للصفقات المفتوحة)
-  const totalUnrealizedPL = Object.keys(portfolio).reduce((sum, asset) => {
-    const holding = portfolio[asset];
-    const currentPrice = marketData[asset] || 0;
-    return sum + (holding.quantity * (currentPrice - holding.avgPrice));
-  }, 0);
-
-  // لتحديد لون الربح/الخسارة (أخضر للربح، أحمر للخسارة)
-  const getPLColor = (pl) => {
-    if (pl > 0) return 'text-green-600';
-    if (pl < 0) return 'text-red-600';
-    return 'text-gray-700';
-  };
-
-  // اقتباسات عالمية للتداول والمال لعرضها في الشريط المتحرك
-  const quotes = [
-    "الاستثمار في المعرفة يدفع أفضل الفوائد. - بنجامين فرانكلين",
-    "لا تضع كل البيض في سلة واحدة. - مثل قديم",
-    "المخاطرة تأتي من عدم معرفة ما تفعله. - وارن بافيت",
-    "السوق هو آلة لنقل الأموال من الصبور إلى عديم الصبر. - وارن بافيت",
-    "القاعدة الأولى: لا تخسر المال. القاعدة الثانية: لا تنسى القاعدة الأولى. - وارن بافيت",
-    "النجاح في التداول لا يأتي من التكهنات، بل من التحليل الصبور. - مصدر مجهول",
-    "المال ليس غاية، بل وسيلة لغاية أسمى. - مثل عربي",
-    "فكر كأنه لا يوجد غد، ولكن تداول كأنك ستتداول للأبد. - مصدر مجهول",
-    "الفرص في السوق لا تنفد أبداً، لكن المال سينفد إذا لم تكن حكيماً. - مصدر مجهول",
-    "التداول الناجح هو 90% إدارة مخاطر، 10% تداول. - مصدر مجهول",
-  ];
-
-  const [currentQuoteIndex, setCurrentQuoteIndex] = useState(0);
-
-  // مؤقت لتغيير الاقتباس في الشريط المتحرك
-  useEffect(() => {
-    const quoteInterval = setInterval(() => {
-      setCurrentQuoteIndex(prevIndex => (prevIndex + 1) % quotes.length);
-    }, 5000); // تغيير الاقتباس كل 5 ثواني
-    return () => clearInterval(quoteInterval);
-  }, []);
-
-  return (
-    <div className="space-y-6">
-      <h2 className="text-3xl font-bold text-gray-800 border-b-2 border-blue-200 pb-4 mb-6">اللوحة الرئيسية</h2>
-
-      {/* Quote Ticker (شريط الاقتباسات المتحرك) */}
-      <div className="bg-blue-100 text-blue-800 p-4 rounded-xl shadow-inner text-center font-semibold overflow-hidden relative">
-        <p className="animate-scroll-text whitespace-nowrap text-lg">
-          {quotes[currentQuoteIndex]}
-        </p>
-        {/* CSS for the scrolling animation */}
-        <style jsx>{`
-          @keyframes scrollText {
-            0% { transform: translateX(100%); }
-            100% { transform: translateX(-100%); }
-          }
-          .animate-scroll-text {
-            animation: scrollText 30s linear infinite; /* مدة الحركة 30 ثانية */
-            animation-delay: -${currentQuoteIndex * 3}s; /* لضبط بداية الاقتباس الأول */
-          }
-        `}</style>
-      </div>
-
-
-      {/* Overview Cards (بطاقات النظرة العامة) */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-gradient-to-br from-blue-600 to-blue-800 text-white p-6 rounded-xl shadow-lg text-center transform hover:scale-105 transition-transform duration-300">
-          <p className="text-lg opacity-90">رصيدك الافتراضي</p>
-          <p className="text-4xl font-extrabold mt-2">{formatNumber(balance)} $</p>
-          <p className="text-sm opacity-80 mt-1">المبلغ المتاح للتداول</p>
-          {balance === 0 && ( // زر "إيداع الأموال" يظهر فقط إذا كان الرصيد صفر
-            <button
-              onClick={() => setCurrentPage('deposit')}
-              className="mt-4 bg-white text-blue-700 px-4 py-2 rounded-lg font-bold hover:bg-blue-100 transition-colors shadow-md"
-            >
-              إيداع أموال الآن
-            </button>
-          )}
-        </div>
-        <div className="bg-white p-6 rounded-xl shadow-lg text-center transform hover:scale-105 transition-transform duration-300">
-          <p className="text-lg text-gray-600">القيمة الإجمالية للمحفظة</p>
-          <p className="text-4xl font-extrabold mt-2 text-gray-800">{formatNumber(totalPortfolioValue)} $</p>
-          <p className="text-sm text-gray-500 mt-1">رصيدك النقدي + قيمة أصولك</p>
-        </div>
-        <div className={`bg-white p-6 rounded-xl shadow-lg text-center transform hover:scale-105 transition-transform duration-300 ${getPLColor(totalUnrealizedPL)}`}>
-          <p className="text-lg text-gray-600">الربح/الخسارة غير المحققة</p>
-          <p className="text-4xl font-extrabold mt-2">{formatNumber(totalUnrealizedPL)} $</p>
-          <p className="text-sm text-gray-500 mt-1">أرباح أو خسائر الأصول المفتوحة</p>
-        </div>
-      </div>
-
-      {/* Market Snapshot (نظرة سريعة على الأسواق) */}
-      <div className="bg-gray-50 p-6 rounded-xl shadow-md">
-        <h3 className="text-2xl font-semibold text-gray-800 mb-4">نظرة سريعة على الأسواق</h3>
-        <div className="overflow-x-auto">
-          <table className="min-w-full bg-white rounded-lg overflow-hidden border border-gray-200">
-            <thead className="bg-gray-200">
-              <tr>
-                <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">الأصل</th>
-                <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">السعر الحالي</th>
-                <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">التغيير (2ث)</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {Object.entries(marketData).slice(0, 5).map(([asset, currentPrice]) => { // عرض 5 أصول فقط
-                const prevPrice = assetPricesRef.current[asset];
-                const change = currentPrice - prevPrice;
-                const changePercent = prevPrice ? (change / prevPrice) * 100 : 0;
-                const changeColor = getPLColor(change);
-
-                return (
-                  <tr key={asset} className="hover:bg-gray-50 transition-colors">
-                    <td className="py-3 px-4 whitespace-nowrap text-gray-800 font-medium">{asset}</td>
-                    <td className="py-3 px-4 whitespace-nowrap text-gray-700">{formatNumber(currentPrice)} $</td>
-                    <td className={`py-3 px-4 whitespace-nowrap ${changeColor}`}>
-                      {change > 0 ? '▲' : (change < 0 ? '▼' : '')} {formatNumber(change)} ({changePercent.toFixed(2)}%)
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        <p className="text-sm text-gray-500 mt-4 text-right">ملاحظة: الأسعار يتم تحديثها كل ثانيتين وهي افتراضية.</p>
-      </div>
-
-      {/* My Portfolio Summary (ملخص محفظتي الافتراضية) */}
-      <div className="bg-gray-50 p-6 rounded-xl shadow-md">
-        <h3 className="text-2xl font-semibold text-gray-800 mb-4">محفظتي الافتراضية</h3>
-        {Object.keys(portfolio).length === 0 ? (
-          <p className="text-gray-600 text-center py-4">محفظتك فارغة. <button onClick={onTradeClick} className="text-blue-600 hover:underline font-semibold">ابدأ التداول الآن!</button></p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full bg-white rounded-lg overflow-hidden border border-gray-200">
-              <thead className="bg-gray-200">
-                <tr>
-                  <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">الأصل</th>
-                  <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">الكمية</th>
-                  <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">متوسط سعر الشراء</th>
-                  <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">الربح/الخسارة</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {Object.entries(portfolio).map(([asset, holding]) => {
-                  const currentPrice = marketData[asset] || 0;
-                  const unrealizedPL = (holding.quantity * (currentPrice - holding.avgPrice));
-                  const plColor = getPLColor(unrealizedPL);
-
-                  return (
-                    <tr key={asset} className="hover:bg-gray-50 transition-colors">
-                      <td className="py-3 px-4 whitespace-nowrap text-gray-800 font-medium">{asset}</td>
-                      <td className="py-3 px-4 whitespace-nowrap text-gray-700">{formatNumber(holding.quantity)}</td>
-                      <td className="py-3 px-4 whitespace-nowrap text-gray-700">{formatNumber(holding.avgPrice)} $</td>
-                      <td className={`py-3 px-4 whitespace-nowrap ${plColor}`}>{formatNumber(unrealizedPL)} $</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      {/* Recent Transactions (سجل العمليات الأخيرة) */}
-      <div className="bg-gray-50 p-6 rounded-xl shadow-md">
-        <h3 className="text-2xl font-semibold text-gray-800 mb-4">سجل العمليات الأخيرة</h3>
-        {transactions.length === 0 ? (
-          <p className="text-gray-600 text-center py-4">لم تقم بأي عمليات تداول بعد.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full bg-white rounded-lg overflow-hidden border border-gray-200">
-              <thead className="bg-gray-200">
-                <tr>
-                  <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">النوع</th>
-                  <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">الأصل</th>
-                  <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">الكمية</th>
-                  <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">السعر</th>
-                  <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">التاريخ والوقت</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {transactions.slice().reverse().slice(0, 5).map((tx, index) => ( // عرض 5 عمليات حديثة فقط
-                  <tr key={index} className="hover:bg-gray-50 transition-colors">
-                    <td className={`py-3 px-4 whitespace-nowrap font-medium ${tx.type === 'شراء' || tx.type === 'إيداع' ? 'text-green-600' : 'text-red-600'}`}>
-                      {tx.type}
-                    </td>
-                    <td className="py-3 px-4 whitespace-nowrap text-gray-800">{tx.asset}</td>
-                    <td className="py-3 px-4 whitespace-nowrap text-gray-700">{formatNumber(tx.quantity)}</td>
-                    <td className="py-3 px-4 whitespace-nowrap text-gray-700">{formatNumber(tx.price)} $</td>
-                    <td className="py-3 px-4 whitespace-nowrap text-gray-500 text-sm">{tx.timestamp}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {transactions.length > 5 && ( // زر لعرض المزيد إذا كان هناك المزيد من العمليات
-            <p className="text-sm text-center text-blue-600 mt-4 cursor-pointer hover:underline" onClick={() => setCurrentPage('dashboard')}>
-              عرض المزيد من العمليات...
-            </p>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-// -----------------------------------------------------------------------------
-// Markets Component (صفحة الأسواق)
-// -----------------------------------------------------------------------------
-const Markets = ({ marketData, assetPricesRef }) => {
-    const { formatNumber } = useContext(AppContext);
-    // لتحديد لون الربح/الخسارة (أخضر للربح، أحمر للخسارة)
-    const getPLColor = (pl) => {
-      if (pl > 0) return 'text-green-600';
-      if (pl < 0) return 'text-red-600';
-      return 'text-gray-700';
-    };
-
-    return (
-      <div className="space-y-6">
-        <h2 className="text-3xl font-bold text-gray-800 border-b-2 border-blue-200 pb-4 mb-6">الأسواق المالية</h2>
-
-        <div className="bg-gray-50 p-6 rounded-xl shadow-md">
-          <p className="text-gray-700 leading-relaxed mb-4">
-            هنا يمكنك استعراض أسعار الأصول المختلفة المتاحة للتداول في هذه المنصة التجريبية. الأسعار تتغير باستمرار لتعكس ظروف السوق الافتراضية.
-          </p>
-          <div className="overflow-x-auto">
-            <table className="min-w-full bg-white rounded-lg overflow-hidden border border-gray-200">
-              <thead className="bg-gray-200">
-                <tr>
-                  <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">الأصل</th>
-                  <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">السعر الحالي</th>
-                  <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">تغيير (2ث)</th>
-                  <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">النوع</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200">
-                {Object.entries(marketData).map(([asset, currentPrice]) => {
-                  const prevPrice = assetPricesRef.current[asset];
-                  const change = currentPrice - prevPrice;
-                  const changePercent = prevPrice ? (change / prevPrice) * 100 : 0;
-                  const changeColor = getPLColor(change);
-
-                  // تحديد نوع الأصل للعرض
-                  let assetType = 'متنوع';
-                  if (asset.includes('أسهم شركة')) assetType = 'أسهم';
-                  else if (asset.includes('الدولار') || asset.includes('الين') || asset.includes('الإسترليني')) assetType = 'عملات (فوركس)';
-                  else if (asset.includes('النفط') || asset.includes('الغاز') || asset.includes('الذهب') || asset.includes('الفضة')) assetType = 'سلع';
-                  else if (asset.includes('الرقمية') || asset.includes('البيتكوين') || asset.includes('الإيثيريوم')) assetType = 'عملات رقمية';
-
-                  return (
-                    <tr key={asset} className="hover:bg-gray-50 transition-colors">
-                      <td className="py-3 px-4 whitespace-nowrap text-gray-800 font-medium">{asset}</td>
-                      <td className="py-3 px-4 whitespace-nowrap text-gray-700">{formatNumber(currentPrice)} $</td>
-                      <td className={`py-3 px-4 whitespace-nowrap ${changeColor}`}>
-                        {change > 0 ? '▲' : (change < 0 ? '▼' : '')} {formatNumber(change)} ({changePercent.toFixed(2)}%)
-                      </td>
-                      <td className="py-3 px-4 whitespace-nowrap text-gray-600 text-sm">{assetType}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <div className="bg-blue-50 border-r-4 border-blue-500 text-blue-800 p-4 rounded-lg mt-6" role="alert">
-            <p className="font-bold">ملاحظة هامة:</p>
-            <p className="text-sm mt-2">تقلبات الأسعار في الأسواق الحقيقية يمكن أن تكون سريعة وكبيرة. هذه المحاكاة تهدف لتعريفك بالمفهوم العام فقط.</p>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-// -----------------------------------------------------------------------------
-// Trade Component (صفحة التداول)
-// -----------------------------------------------------------------------------
-const Trade = ({ marketData, onBuy, onSell, balance, portfolio }) => {
-    const { showMessage, formatNumber } = useContext(AppContext);
-    const [selectedAsset, setSelectedAsset] = useState(''); // الأصل المختار للتداول
-    const [quantity, setQuantity] = useState(''); // الكمية المراد تداولها
-
-    // تعيين الأصل الافتراضي عند تحميل المكون
-    useEffect(() => {
-      if (Object.keys(marketData).length > 0 && !selectedAsset) {
-        setSelectedAsset(Object.keys(marketData)[0]);
-      }
-    }, [marketData, selectedAsset]);
-
-    const currentPrice = selectedAsset ? marketData[selectedAsset] : 0;
-    const estimatedCost = currentPrice * parseFloat(quantity || 0); // التكلفة التقديرية للصفقة
-    const holding = portfolio[selectedAsset] || { quantity: 0, avgPrice: 0 }; // الكمية المملوكة من الأصل المختار
-
-    // معالجة تغيير الكمية المدخلة
-    const handleQuantityChange = (e) => {
-      const value = e.target.value;
-      // السماح فقط بالأرقام والقيم الموجبة والعشرية
-      if (/^\d*\.?\d*$/.test(value) && parseFloat(value) >= 0) {
-        setQuantity(value);
-      }
-    };
-
-    // معالجة النقر على زر الشراء
-    const handleBuyClick = () => {
-      const qtyNum = parseFloat(quantity);
-      if (!selectedAsset) {
-        showMessage('الرجاء اختيار أصل للتداول أولاً.', 'error');
-        return;
-      }
-      if (isNaN(qtyNum) || qtyNum <= 0) {
-        showMessage('الرجاء إدخال كمية صحيحة وموجبة.', 'error');
-        return;
-      }
-      if (balance < estimatedCost) { // التحقق من الرصيد الكافي
-          showMessage('رصيدك الافتراضي غير كافٍ لإتمام هذه الصفقة.', 'error');
-          return;
-      }
-      onBuy(selectedAsset, qtyNum); // تنفيذ عملية الشراء
-      setQuantity(''); // مسح حقل الكمية
-    };
-
-    // معالجة النقر على زر البيع
-    const handleSellClick = () => {
-      const qtyNum = parseFloat(quantity);
-      if (!selectedAsset) {
-        showMessage('الرجاء اختيار أصل للتداول أولاً.', 'error');
-        return;
-      }
-      if (isNaN(qtyNum) || qtyNum <= 0) {
-        showMessage('الرجاء إدخال كمية صحيحة وموجبة.', 'error');
-        return;
-      }
-      if (holding.quantity < qtyNum) { // التحقق من امتلاك الكمية الكافية
-          showMessage('ليس لديك كمية كافية من هذا الأصل للبيع.', 'error');
-          return;
-      }
-      onSell(selectedAsset, qtyNum); // تنفيذ عملية البيع
-      setQuantity(''); // مسح حقل الكمية
-    };
-
-    return (
-      <div className="space-y-6">
-        <h2 className="text-3xl font-bold text-gray-800 border-b-2 border-blue-200 pb-4 mb-6">صفحة التداول</h2>
-
-        <div className="bg-gray-50 p-6 rounded-xl shadow-md flex flex-col md:flex-row gap-6">
-          {/* Market Data & Selection (بيانات السوق واختيار الأصل) */}
-          <div className="flex-1 space-y-4">
-            <p className="text-lg text-gray-700 mb-4">
-              رصيدك الافتراضي المتاح: <span className="font-extrabold text-blue-600 text-2xl">{formatNumber(balance)} $</span>
-            </p>
-
-            <div>
-              <label htmlFor="asset-select" className="block text-gray-700 text-lg font-medium mb-2">اختر الأصل للتداول:</label>
-              <select
-                id="asset-select"
-                className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white shadow-sm text-gray-800 text-lg"
-                value={selectedAsset}
-                onChange={(e) => {
-                  setSelectedAsset(e.target.value);
-                  setQuantity(''); // إعادة تعيين الكمية عند تغيير الأصل
-                }}
-              >
-                <option value="" disabled>الرجاء الاختيار...</option>
-                {Object.keys(marketData).map(asset => (
-                  <option key={asset} value={asset}>{asset}</option>
-                ))}
-              </select>
-            </div>
-
-            {selectedAsset && ( // عرض معلومات الأصل المختار
-              <div className="border border-gray-200 p-4 rounded-lg bg-white shadow-sm">
-                <h4 className="text-xl font-semibold text-gray-800 mb-2">معلومات الأصل: <span className="text-blue-700">{selectedAsset}</span></h4>
-                <p className="text-lg text-gray-700">السعر الحالي: <span className="font-bold text-green-600 text-xl">{formatNumber(currentPrice)} $</span></p>
-                <p className="text-md text-gray-600">
-                  الكمية المملوكة: <span className="font-bold text-gray-800">{formatNumber(holding.quantity)}</span>
-                  {holding.quantity > 0 && ` (متوسط سعر الشراء: ${formatNumber(holding.avgPrice)} $)`}
-                </p>
-                <p className="text-sm text-gray-500 mt-2">السعر يتحدث باستمرار لمحاكاة ظروف السوق الحقيقية.</p>
+            // Attempt to sign in with custom token provided by Canvas environment
+            // محاولة تسجيل الدخول باستخدام توكن مخصص (إذا توفر من بيئة Canvas)
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                authentication.signInWithCustomToken(__initial_auth_token).catch(err => {
+                console.error("Custom token sign-in failed, falling back to anonymous:", err);
+                authentication.signInAnonymously().catch(err => console.error("Anonymous sign-in failed:", err));
+              });
+            } else {
+              // Fallback to anonymous sign-in if no custom token (e.g., local development)
+              authentication.signInAnonymously().catch(err => console.error("Anonymous sign-in failed:", err));
+            }
+
+            return () => unsubscribe(); // Cleanup auth listener on component unmount
+          }, []);
+
+          // --- useEffect hook for Firestore Data Listener ---
+          // يستمع هذا الكود للتغييرات في بيانات المستخدم في Firestore ويحدث حالة التطبيق.
+          React.useEffect(() => {
+            if (!db || !userId) return; // لا تعمل إلا إذا كانت قاعدة البيانات ومعرف المستخدم متاحين
+
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const userDocRef = db.doc(`artifacts/${appId}/users/${userId}/tradingData/account`);
+
+            // Listen for real-time updates to user's trading data
+            const unsubscribe = userDocRef.onSnapshot((docSnap) => {
+              if (docSnap.exists()) {
+                const data = docSnap.data();
+                setBalance(data.balance || 0); // تحديث الرصيد
+                setPortfolio(data.portfolio || {}); // تحديث المحفظة
+                setTransactions(data.transactions || []); // تحديث سجل العمليات
+              } else {
+                console.warn("User data document does not exist for current user. This should be initialized during auth.");
+              }
+            }, (error) => {
+              console.error("Error listening to user data:", error);
+              showMessage("خطأ في تحديث البيانات. يرجى التحقق من اتصالك.", "error");
+            });
+
+            return () => unsubscribe(); // Cleanup snapshot listener on component unmount
+          }, [db, userId]); // يعتمد على كائن db ومعرف المستخدم
+
+          // --- useEffect hook for Market Data Simulation ---
+          // يقوم بمحاكاة تحديثات أسعار السوق بشكل دوري (كل 2 ثانية).
+          React.useEffect(() => {
+            const interval = setInterval(() => {
+              const newPrices = {};
+              for (const asset in assetPricesRef.current) {
+                // Simulate random fluctuation, higher volatility for crypto
+                const volatilityFactor = (asset.includes('الرقمية') || asset.includes('البيتكوين') || asset.includes('الإيثيريوم')) ? 0.025 : 0.015;
+                const fluctuation = (Math.random() * 2 - 1) * volatilityFactor * assetPricesRef.current[asset];
+                newPrices[asset] = parseFloat((assetPricesRef.current[asset] + fluctuation).toFixed(asset.includes('الدولار') || asset.includes('الين') ? 4 : 2));
+                if (newPrices[asset] <= 0.01) newPrices[asset] = 0.01; // Prevent price from going too low
+              }
+              assetPricesRef.current = newPrices; // تحديث المرجع بآخر الأسعار
+              setMarketData(newPrices); // تحديث حالة بيانات السوق
+            }, 2000); // تحديث كل 2 ثانية
+
+            setMarketData(assetPricesRef.current); // Initial set of market data on first render
+
+            return () => clearInterval(interval); // تنظيف المؤقت عند إزالة المكون
+          }, []);
+
+          // --- Trading Functions (وظائف التداول) ---
+          // دالة مساعدة لتحديث بيانات المستخدم في Firestore بعد أي عملية تداول أو إيداع.
+          const updateFirestoreUserData = async (newBalance, newPortfolio, newTransactions) => {
+            if (!db || !userId) {
+              showMessage("خطأ: لا يمكن تحديث البيانات. لم يتم تسجيل الدخول.", "error");
+              return false;
+            }
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+            const userDocRef = db.doc(`artifacts/${appId}/users/${userId}/tradingData/account`);
+            try {
+              await userDocRef.set({
+                balance: newBalance,
+                portfolio: newPortfolio,
+                transactions: newTransactions,
+                lastUpdate: new Date().toISOString() // إضافة ختم زمني لآخر تحديث
+              });
+              return true;
+            } catch (e) {
+              console.error("Error updating user data in Firestore:", e);
+              showMessage("حدث خطأ أثناء حفظ بيانات التداول. يرجى المحاولة مرة أخرى.", "error");
+              return false;
+            }
+          };
+
+          // معالجة عملية الشراء: تحديث الرصيد، المحفظة، وسجل العمليات.
+          const handleBuy = async (asset, quantity) => {
+            const currentPrice = marketData[asset];
+            const cost = currentPrice * quantity;
+
+            if (balance >= cost) {
+              const newBalance = parseFloat((balance - cost).toFixed(2));
+              const currentHolding = portfolio[asset] || { quantity: 0, totalCost: 0, avgPrice: 0 };
+              const newQuantity = currentHolding.quantity + quantity;
+              const newTotalCost = currentHolding.totalCost + cost;
+              const newAvgPrice = parseFloat((newTotalCost / newQuantity).toFixed(2));
+
+              const newPortfolio = {
+                ...portfolio,
+                [asset]: { quantity: newQuantity, avgPrice: newAvgPrice, totalCost: newTotalCost }
+              };
+
+              const newTransactions = [
+                ...transactions,
+                { type: 'شراء', asset, quantity, price: currentPrice, timestamp: new Date().toLocaleString() }
+              ];
+
+              const success = await updateFirestoreUserData(newBalance, newPortfolio, newTransactions);
+              if (success) {
+                showMessage(`تم شراء ${quantity} من ${asset} بنجاح!`, 'success');
+              }
+            } else {
+              showMessage('رصيدك الافتراضي غير كافٍ لإتمام عملية الشراء.', 'error');
+            }
+          };
+
+          // معالجة عملية البيع: تحديث الرصيد، المحفظة، وسجل العمليات.
+          const handleSell = async (asset, quantity) => {
+            const currentPrice = marketData[asset];
+            const holding = portfolio[asset];
+
+            if (holding && holding.quantity >= quantity) {
+              const revenue = currentPrice * quantity;
+              const newBalance = parseFloat((balance + revenue).toFixed(2));
+
+              const newQuantity = holding.quantity - quantity;
+              let newPortfolio;
+              if (newQuantity <= 0) {
+                newPortfolio = { ...portfolio };
+                delete newPortfolio[asset]; // إزالة الأصل من المحفظة إذا تم بيع الكمية كلها
+              } else {
+                const newTotalCost = holding.totalCost - (holding.avgPrice * quantity);
+                newPortfolio = {
+                  ...portfolio,
+                  [asset]: { quantity: newQuantity, avgPrice: parseFloat((newTotalCost / newQuantity).toFixed(2)), totalCost: newTotalCost }
+                };
+              }
+
+              const newTransactions = [
+                ...transactions,
+                { type: 'بيع', asset, quantity, price: currentPrice, timestamp: new Date().toLocaleString() }
+              ];
+
+              const success = await updateFirestoreUserData(newBalance, newPortfolio, newTransactions);
+              if (success) {
+                showMessage(`تم بيع ${quantity} من ${asset} بنجاح!`, 'success');
+              }
+            } else {
+              showMessage('ليس لديك كمية كافية من هذا الأصل للبيع.', 'error');
+            }
+          };
+
+          // --- Rendering Logic based on currentPage (منطق عرض الصفحات) ---
+          const renderPage = () => {
+            // عرض رسالة تحميل بينما يتم التحقق من حالة المصادقة الأولية
+            if (!isAuthReady) {
+              return (
+                <div className="flex justify-center items-center h-64">
+                  <p className="text-xl text-gray-700">جاري تحميل النظام...</p>
+                </div>
+              );
+            }
+
+            // عرض صفحة المصادقة إذا لم يتم تسجيل الدخول
+            if (currentPage === 'auth') {
+              return <AuthPage auth={auth} showMessage={showMessage} setCurrentPage={setCurrentPage} />;
+            }
+
+            // بمجرد المصادقة، يتم توفير السياق للمكونات الفرعية
+            return (
+              <AppContext.Provider value={{ db, auth, userId, showMessage, formatNumber }}>
+                {currentPage === 'accountSetup' && <AccountSetup setCurrentPage={setCurrentPage} />}
+                {currentPage === 'deposit' && (
+                  <DepositFunds
+                    balance={balance}
+                    userId={userId}
+                    db={db}
+                    showMessage={showMessage}
+                    updateFirestoreUserData={updateFirestoreUserData}
+                    transactions={transactions}
+                  />
+                )}
+                {currentPage === 'dashboard' && (
+                  <Dashboard
+                    balance={balance}
+                    portfolio={portfolio}
+                    marketData={marketData}
+                    transactions={transactions}
+                    onTradeClick={() => setCurrentPage('trade')}
+                    setCurrentPage={setCurrentPage}
+                    assetPricesRef={assetPricesRef}
+                  />
+                )}
+                {currentPage === 'markets' && <Markets marketData={marketData} assetPricesRef={assetPricesRef} />}
+                {currentPage === 'trade' && (
+                  <Trade
+                    marketData={marketData}
+                    onBuy={handleBuy}
+                    onSell={handleSell}
+                    balance={balance}
+                    portfolio={portfolio}
+                    showMessage={showMessage}
+                  />
+                )}
+                {currentPage === 'learn' && <Learn />}
+              </AppContext.Provider>
+            );
+          };
+
+          return (
+            <div dir="rtl" className="min-h-screen bg-gray-100 font-inter flex flex-col items-center p-4 sm:p-6 md:p-8">
+              {/* Meta for responsive design */}
+              <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+              {/* Header and Navigation (Visible only after authentication) */}
+              {userId && (
+                <div className="w-full max-w-6xl bg-white p-4 sm:p-6 rounded-xl shadow-lg mb-6 flex flex-col sm:flex-row justify-between items-center gap-4">
+                  <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-blue-700 whitespace-nowrap">
+                    بورصة المتداول العربي <span className="text-gray-500 text-xl">(تجريبية)</span>
+                  </h1>
+                  <nav className="flex flex-wrap justify-center gap-2 sm:gap-4 md:gap-6 mt-4 sm:mt-0">
+                    <button
+                      onClick={() => setCurrentPage('dashboard')}
+                      className={`px-4 py-2 rounded-lg font-medium text-lg transition-all duration-300 transform hover:scale-105 ${currentPage === 'dashboard' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'}`}
+                    >
+                      اللوحة الرئيسية
+                    </button>
+                    <button
+                      onClick={() => setCurrentPage('markets')}
+                      className={`px-4 py-2 rounded-lg font-medium text-lg transition-all duration-300 transform hover:scale-105 ${currentPage === 'markets' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'}`}
+                    >
+                      الأسواق
+                    </button>
+                    <button
+                      onClick={() => setCurrentPage('trade')}
+                      className={`px-4 py-2 rounded-lg font-medium text-lg transition-all duration-300 transform hover:scale-105 ${currentPage === 'trade' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'}`}
+                    >
+                      التداول
+                    </button>
+                    <button
+                      onClick={() => setCurrentPage('learn')}
+                      className={`px-4 py-2 rounded-lg font-medium text-lg transition-all duration-300 transform hover:scale-105 ${currentPage === 'learn' ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-200 text-gray-700 hover:bg-blue-100 hover:text-blue-700'}`}
+                    >
+                      تعلم التداول
+                    </button>
+                    <button
+                      onClick={async () => { await auth.signOut(); showMessage('تم تسجيل الخروج بنجاح.', 'success'); }}
+                      className="px-4 py-2 rounded-lg font-medium text-lg bg-red-500 text-white hover:bg-red-600 transition-all duration-300 transform hover:scale-105 shadow-md"
+                    >
+                      تسجيل الخروج
+                    </button>
+                  </nav>
+                </div>
+              )}
+
+              {/* Message Display */}
+              {message.text && (
+                <div
+                  className={`fixed top-4 left-1/2 -translate-x-1/2 p-3 sm:p-4 rounded-lg shadow-xl text-white z-50 transition-opacity duration-300 ${
+                    message.type === 'success' ? 'bg-green-500' : 'bg-red-500'
+                  } ${message.text ? 'opacity-100' : 'opacity-0'}`}
+                  style={{ minWidth: '250px', textAlign: 'center' }}
+                >
+                  {message.text}
+                </div>
+              )}
+
+              {/* Main Content Area */}
+              <div className="w-full max-w-6xl bg-white p-4 sm:p-6 md:p-8 rounded-xl shadow-lg">
+                {renderPage()}
               </div>
-            )}
-          </div>
 
-          {/* Trade Controls (عناصر تحكم التداول) */}
-          <div className="flex-1 space-y-4">
-            <h3 className="text-2xl font-semibold text-gray-800 mb-2">تنفيذ عملية تداول</h3>
-            <div>
-              <label htmlFor="quantity-input" className="block text-gray-700 text-lg font-medium mb-2">الكمية:</label>
-              <input
-                id="quantity-input"
-                type="number"
-                value={quantity}
-                onChange={handleQuantityChange}
-                placeholder="أدخل الكمية"
-                className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm text-gray-800 text-lg"
-                min="0"
-                step="0.01"
-              />
+              {/* Footer */}
+              <div className="w-full max-w-6xl text-center text-gray-600 mt-8 p-4 border-t border-gray-200">
+                <p className="text-md">منصة تداول تجريبية تعليمية للمبتدئين العرب.</p>
+                <p className="text-sm mt-2">جميع الأسعار والأرباح/الخسائر افتراضية ولأغراض تعليمية فقط.</p>
+                <p className="text-xs mt-1">© 2024 بورصة المتداول العربي. كل الحقوق محفوظة.</p>
+              </div>
             </div>
+          );
+        };
 
-            <div className="bg-white p-4 rounded-lg shadow-sm">
-              <p className="text-lg text-gray-700">التكلفة التقديرية / الإيرادات: <span className="font-extrabold text-purple-700 text-2xl">{formatNumber(estimatedCost)} $</span></p>
-              <p className="text-sm text-gray-500 mt-1">هذه القيمة تقديرية وقد تتغير قليلاً وقت التنفيذ الفعلي بسبب تقلبات الأسعار.</p>
+
+        // -----------------------------------------------------------------------------
+        // AuthPage Component (صفحة المصادقة: تسجيل الدخول/التسجيل)
+        // -----------------------------------------------------------------------------
+        const AuthPage = ({ auth, showMessage, setCurrentPage }) => {
+          const [email, setEmail] = React.useState('');
+          const [password, setPassword] = React.useState('');
+          const [isRegistering, setIsRegistering] = React.useState(false); // لتحديد ما إذا كانت العملية تسجيل أو تسجيل دخول
+          const [loading, setLoading] = React.useState(false); // حالة التحميل
+
+          // معالجة إرسال النموذج (تسجيل الدخول أو التسجيل)
+          const handleSubmit = async (e) => {
+            e.preventDefault();
+            setLoading(true);
+            try {
+              if (isRegistering) {
+                await auth.createUserWithEmailAndPassword(email, password); // إنشاء مستخدم جديد
+                showMessage('تم التسجيل بنجاح! يمكنك الآن تسجيل الدخول.', 'success');
+                setEmail('');
+                setPassword('');
+                setIsRegistering(false); // التحول إلى وضع تسجيل الدخول بعد التسجيل
+              } else {
+                await auth.signInWithEmailAndPassword(email, password); // تسجيل دخول المستخدم
+                showMessage('تم تسجيل الدخول بنجاح!', 'success');
+              }
+            } catch (error) {
+              console.error("Auth error:", error);
+              let errorMessage = 'حدث خطأ. يرجى المحاولة مرة أخرى.';
+              // رسائل خطأ مخصصة بناءً على رمز الخطأ من Firebase
+              if (error.code === 'auth/email-already-in-use') {
+                errorMessage = 'هذا البريد الإلكتروني مستخدم بالفعل. يرجى تسجيل الدخول.';
+              } else if (error.code === 'auth/invalid-email') {
+                errorMessage = 'صيغة البريد الإلكتروني غير صحيحة.';
+              } else if (error.code === 'auth/weak-password') {
+                errorMessage = 'كلمة المرور ضعيفة جدًا (يجب أن تكون 6 أحرف على الأقل).';
+              } else if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+                errorMessage = 'البريد الإلكتروني أو كلمة المرور غير صحيحة.';
+              } else if (error.code === 'auth/too-many-requests') {
+                errorMessage = 'تم حظر هذا الجهاز بسبب كثرة المحاولات الفاشلة. يرجى المحاولة لاحقاً.';
+              }
+              showMessage(errorMessage, 'error');
+            } finally {
+              setLoading(false); // إيقاف حالة التحميل
+            }
+          };
+
+          return (
+            <div className="flex flex-col items-center justify-center p-6 space-y-6">
+              <h2 className="text-3xl font-bold text-blue-700 mb-6">مرحباً بك في بورصة المتداول العربي</h2>
+              <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md">
+                <h3 className="text-2xl font-semibold text-gray-800 text-center mb-6">
+                  {isRegistering ? 'تسجيل حساب جديد' : 'تسجيل الدخول'}
+                </h3>
+                <form onSubmit={handleSubmit} className="space-y-4">
+                  <div>
+                    <label htmlFor="email" className="block text-gray-700 text-lg font-medium mb-2">البريد الإلكتروني:</label>
+                    <input
+                      type="email"
+                      id="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-800"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="password" className="block text-gray-700 text-lg font-medium mb-2">كلمة المرور:</label>
+                    <input
+                      type="password"
+                      id="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-800"
+                      required
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full bg-blue-600 text-white p-4 rounded-xl font-bold text-xl hover:bg-blue-700 transition-all duration-300 shadow-md enabled:hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {loading ? 'جاري التحميل...' : (isRegistering ? 'تسجيل' : 'تسجيل الدخول')}
+                  </button>
+                </form>
+                <p className="text-center text-gray-600 mt-6">
+                  {isRegistering ? 'لديك حساب بالفعل؟' : 'ليس لديك حساب؟'}
+                  <button
+                    onClick={() => setIsRegistering(prev => !prev)}
+                    className="text-blue-600 hover:underline font-semibold mr-2"
+                  >
+                    {isRegistering ? 'تسجيل الدخول' : 'سجل الآن'}
+                  </button>
+                </p>
+              </div>
             </div>
+          );
+        };
 
-            <div className="flex flex-col sm:flex-row gap-4">
-              <button
-                onClick={handleBuyClick}
-                disabled={!selectedAsset || parseFloat(quantity) <= 0 || balance < estimatedCost}
-                className="flex-1 bg-green-600 text-white p-4 rounded-xl font-bold text-xl hover:bg-green-700 transition-all duration-300 shadow-md enabled:hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                شراء
-              </button>
-              <button
-                onClick={handleSellClick}
-                disabled={!selectedAsset || parseFloat(quantity) <= 0 || holding.quantity < parseFloat(quantity)}
-                className="flex-1 bg-red-600 text-white p-4 rounded-xl font-bold text-xl hover:bg-red-700 transition-all duration-300 shadow-md enabled:hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                بيع
-              </button>
+
+        // -----------------------------------------------------------------------------
+        // AccountSetup Component (محاكاة إعداد الحساب)
+        // -----------------------------------------------------------------------------
+        const AccountSetup = ({ setCurrentPage }) => {
+          const { showMessage } = React.useContext(AppContext);
+          const [accountType, setAccountType] = React.useState('');
+          const [leverage, setLeverage] = React.useState('');
+          const [agreedToTerms, setAgreedToTerms] = React.useState(false); // حالة الموافقة على الشروط
+          const [showTermsModal, setShowTermsModal] = React.useState(false); // حالة عرض نافذة الشروط
+
+          // معالجة اكتمال إعداد الحساب
+          const handleSetupComplete = () => {
+            if (!accountType || !leverage || !agreedToTerms) {
+              showMessage('الرجاء إكمال جميع الحقول والموافقة على الشروط.', 'error');
+              return;
+            }
+            showMessage('تم إعداد حسابك التجريبي بنجاح! يمكنك الآن إيداع الأموال لبدء التداول.', 'success');
+            setCurrentPage('deposit'); // الانتقال إلى صفحة الإيداع بعد الإعداد
+          };
+
+          return (
+            <div className="space-y-6 p-6">
+              <h2 className="text-3xl font-bold text-gray-800 border-b-2 border-blue-200 pb-4 mb-6 text-center">إعداد حسابك التجريبي</h2>
+
+              <p className="text-gray-700 leading-relaxed text-center mb-6">
+                لتعيش تجربة تداول واقعية، يرجى إكمال إعدادات حسابك التجريبي. هذه الخطوات تحاكي ما يحدث في منصات التداول الحقيقية.
+              </p>
+
+              <div className="bg-gray-50 p-6 rounded-xl shadow-md space-y-4">
+                <div>
+                  <label htmlFor="account-type" className="block text-gray-700 text-lg font-medium mb-2">نوع الحساب الافتراضي:</label>
+                  <select
+                    id="account-type"
+                    className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white shadow-sm text-gray-800"
+                    value={accountType}
+                    onChange={(e) => setAccountType(e.target.value)}
+                    required
+                  >
+                    <option value="" disabled>اختر نوع الحساب...</option>
+                    <option value="standard">قياسي (Standard)</option>
+                    <option value="pro">احترافي (Pro)</option>
+                    <option value="cent">حساب سنت (Cent)</option>
+                  </select>
+                  <p className="text-sm text-gray-500 mt-1">
+                    في التداول الحقيقي، تختلف أنواع الحسابات في شروطها وعمولاتها. هنا، كلها لأغراض المحاكاة.
+                  </p>
+                </div>
+
+                <div>
+                  <label htmlFor="leverage" className="block text-gray-700 text-lg font-medium mb-2">الرافعة المالية الافتراضية:</label>
+                  <select
+                    id="leverage"
+                    className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white shadow-sm text-gray-800"
+                    value={leverage}
+                    onChange={(e) => setLeverage(e.target.value)}
+                    required
+                  >
+                    <option value="" disabled>اختر الرافعة المالية...</option>
+                    <option value="1:50">1:50 (رافعة منخفضة)</option>
+                    <option value="1:100">1:100 (رافعة متوسطة)</option>
+                    <option value="1:500">1:500 (رافعة عالية)</option>
+                  </select>
+                  <div className="bg-red-50 border-r-4 border-red-500 text-red-800 p-4 rounded-lg mt-4" role="alert">
+                    <p className="font-bold">تحذير مهم عن الرافعة المالية:</p>
+                    <p className="text-sm mt-2">
+                      في التداول الحقيقي، <strong className="text-red-700">الرافعة المالية تزيد من أرباحك وخسائرك بشكل كبير</strong>. يمكن أن تؤدي إلى خسارة رأس مالك بالكامل بسرعة. استخدمها بحذر شديد وفهم كامل لمخاطرها. هذه مجرد محاكاة.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center">
+                  <input
+                    type="checkbox"
+                    id="agree-terms"
+                    checked={agreedToTerms}
+                    onChange={(e) => setAgreedToTerms(e.target.checked)}
+                    className="h-5 w-5 text-blue-600 rounded focus:ring-blue-500 cursor-pointer"
+                  />
+                  <label htmlFor="agree-terms" className="mr-3 text-gray-700 text-lg cursor-pointer">
+                    أوافق على <span className="text-blue-600 hover:underline cursor-pointer" onClick={() => setShowTermsModal(true)}>الشروط والأحكام الافتراضية</span>
+                  </label>
+                </div>
+
+                <button
+                  onClick={handleSetupComplete}
+                  disabled={!accountType || !leverage || !agreedToTerms}
+                  className="w-full bg-blue-600 text-white p-4 rounded-xl font-bold text-xl hover:bg-blue-700 transition-all duration-300 shadow-md enabled:hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  إعداد الحساب التجريبي
+                </button>
+              </div>
+
+              {/* Terms and Conditions Modal */}
+              {showTermsModal && (
+                <div className="fixed inset-0 bg-gray-600 bg-opacity-75 flex justify-center items-center z-50 p-4">
+                  <div className="bg-white rounded-xl shadow-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                    <h3 className="text-2xl font-bold text-gray-800 mb-4">الشروط والأحكام الافتراضية</h3>
+                    <div className="text-gray-700 text-sm leading-relaxed space-y-3">
+                      <p>مرحباً بك في منصة التداول التجريبية. يرجى قراءة الشروط والأحكام التالية:</p>
+                      <ul className="list-disc list-inside pr-4 space-y-2">
+                        <li>هذه المنصة هي لأغراض تعليمية ومحاكاة فقط.</li>
+                        <li>جميع الأموال والأرباح والخسائر المعروضة هي افتراضية ولا تمثل أي قيمة نقدية حقيقية.</li>
+                        <li>الأهداف الرئيسية للمنصة هي مساعدتك على فهم آليات التداول، إدارة المخاطر، واستراتيجيات التداول.</li>
+                        <li>الأسعار المعروضة هي أسعار محاكاة ولا تعكس الأسعار الحقيقية للأسواق المالية في الوقت الفعلي.</li>
+                        <li>الاستخدام المستمر للمنصة يعني موافقتك على هذه الشروط.</li>
+                        <li>لا نتحمل أي مسؤولية عن أي قرارات تداول حقيقية تتخذها بناءً على تجربتك في هذه المنصة التجريبية.</li>
+                        <li><strong className="text-red-600">التداول الحقيقي ينطوي على مخاطر عالية وقد يؤدي إلى خسارة رأس المال بالكامل.</strong></li>
+                        <li>الحسابات والبيانات الشخصية يتم التعامل معها بما يتماشى مع سياسة الخصوصية الافتراضية لهذه المنصة التعليمية.</li>
+                        <li>وحدة قياس حركة السعر في أزواج العملات هي "النقطة" أو "بيب" (Pip). كل حركة سعرية صغيرة تعادل بيب واحد. في هذه المنصة التعليمية، ستتعلم كيف تؤثر حركة "البيبات" على ربحك أو خسارتك الافتراضية.</li>
+                      </ul>
+                      <p>بالموافقة على هذه الشروط، أنت تقر بأنك فهمت طبيعة المنصة التجريبية ومخاطر التداول الحقيقي.</p>
+                    </div>
+                    <button
+                      onClick={() => setShowTermsModal(false)}
+                      className="mt-6 w-full bg-blue-600 text-white p-3 rounded-lg font-bold hover:bg-blue-700 transition-colors"
+                    >
+                      إغلاق
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
+          );
+        };
 
-            {/* Important notes for beginners (نصائح هامة للمبتدئين) */}
-            <div className="bg-yellow-50 border-r-4 border-yellow-500 text-yellow-800 p-4 rounded-lg mt-4" role="alert">
-              <p className="font-bold">نصائح هامة للمبتدئين:</p>
-              <ul className="list-disc list-inside text-sm mt-2 space-y-1 pr-4">
-                <li><strong className="text-yellow-700">التكلفة والكمية:</strong> قبل الشراء، تأكد أن رصيدك الافتراضي كافٍ لتغطية التكلفة التقديرية. قبل البيع، تأكد أنك تمتلك الكمية الكافية من الأصل.</li>
-                <li><strong className="text-yellow-700">القرارات المدروسة:</strong> لا تضغط على "شراء" أو "بيع" إلا بعد أن تكون متأكداً من قرارك وخطتك.</li>
-                <li><strong className="text-yellow-700">المخاطر والتعلم:</strong> التداول يتطلب دراسة وفهم عميق للمخاطر. هذه المنصة للمحاكاة والتعلم، وليست للتداول بأموال حقيقية.</li>
-              </ul>
+
+        // -----------------------------------------------------------------------------
+        // DepositFunds Component (صفحة إيداع الأموال الافتراضية)
+        // -----------------------------------------------------------------------------
+        const DepositFunds = ({ balance, userId, db, showMessage, updateFirestoreUserData, transactions }) => {
+          const { formatNumber } = React.useContext(AppContext);
+          const [depositAmount, setDepositAmount] = React.useState('');
+          const [loading, setLoading] = React.useState(false);
+
+          // معالجة عملية الإيداع الافتراضية
+          const handleDeposit = async () => {
+            const amount = parseFloat(depositAmount);
+            if (isNaN(amount) || amount <= 0) {
+              showMessage('الرجاء إدخال مبلغ إيداع صحيح وموجب.', 'error');
+              return;
+            }
+
+            setLoading(true);
+            try {
+              const newBalance = parseFloat((balance + amount).toFixed(2));
+              const newTransactions = [
+                ...transactions, // إضافة العملية الجديدة إلى سجل العمليات الحالي
+                { type: 'إيداع', asset: 'رصيد افتراضي', quantity: amount, price: 1, timestamp: new Date().toLocaleString() }
+              ];
+
+              // تحديث بيانات المستخدم في Firestore
+              const success = await updateFirestoreUserData(newBalance, {}, newTransactions); // المحفظة لا تتغير في عملية الإيداع
+              if (success) {
+                showMessage(`تم إيداع ${formatNumber(amount)}$ افتراضيًا بنجاح!`, 'success');
+                setDepositAmount(''); // مسح حقل الإيداع
+              }
+            } catch (e) {
+              showMessage('فشل الإيداع الافتراضي. يرجى المحاولة مرة أخرى.', 'error');
+              console.error("Deposit error:", e);
+            } finally {
+              setLoading(false);
+            }
+          };
+
+          return (
+            <div className="space-y-6 p-6">
+              <h2 className="text-3xl font-bold text-gray-800 border-b-2 border-blue-200 pb-4 mb-6 text-center">إيداع الأموال الافتراضية</h2>
+
+              <div className="bg-gray-50 p-6 rounded-xl shadow-md space-y-4">
+                <p className="text-lg text-gray-700 mb-4 text-center">
+                  رصيدك الافتراضي الحالي: <span className="font-extrabold text-blue-600 text-2xl">{formatNumber(balance)} $</span>
+                </p>
+
+                <div className="border border-blue-200 p-4 rounded-lg bg-blue-50 text-blue-800 text-center">
+                  <p className="font-bold mb-2">كيف تعمل عملية الإيداع التجريبية؟</p>
+                  <p className="text-sm">
+                    هنا يمكنك إضافة أموال افتراضية إلى حسابك. هذه العملية تحاكي خطوات الإيداع في منصات التداول الحقيقية. لن يتم استخدام أي أموال حقيقية.
+                  </p>
+                </div>
+
+                <div>
+                  <label htmlFor="deposit-amount" className="block text-gray-700 text-lg font-medium mb-2">المبلغ المراد إيداعه (بالدولار الافتراضي):</label>
+                  <input
+                    type="number"
+                    id="deposit-amount"
+                    value={depositAmount}
+                    onChange={(e) => setDepositAmount(e.target.value)}
+                    placeholder="أدخل المبلغ"
+                    className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm text-gray-800"
+                    min="1"
+                    step="1"
+                    required
+                  />
+                </div>
+
+                <div className="border border-gray-200 p-4 rounded-lg bg-white shadow-sm">
+                  <h4 className="text-xl font-semibold text-gray-800 mb-2">طرق الإيداع الافتراضية:</h4>
+                  <p className="text-gray-700 text-md">
+                    (لأغراض المحاكاة، يمكنك اختيار طريقة):
+                  </p>
+                  <ul className="list-disc list-inside pr-4 mt-2 space-y-1">
+                    <li>تحويل بنكي افتراضي</li>
+                    <li>بطاقة ائتمان افتراضية</li>
+                    <li>محفظة رقمية افتراضية</li>
+                  </ul>
+                  <p className="text-sm text-gray-500 mt-2">
+                    في الواقع، ستكون هذه خيارات دفع حقيقية. هنا، تهدف فقط لفهم العملية.
+                  </p>
+                </div>
+
+                <button
+                  onClick={handleDeposit}
+                  disabled={loading || parseFloat(depositAmount) <= 0 || isNaN(parseFloat(depositAmount))}
+                  className="w-full bg-green-600 text-white p-4 rounded-xl font-bold text-xl hover:bg-green-700 transition-all duration-300 shadow-md enabled:hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loading ? 'جاري الإيداع...' : 'إيداع الآن'}
+                </button>
+
+                <div className="bg-yellow-50 border-r-4 border-yellow-500 text-yellow-800 p-4 rounded-lg mt-4" role="alert">
+                    <p className="font-bold">ملاحظة:</p>
+                    <p className="text-sm mt-2">هذا إيداع أموال افتراضية فقط. لن يتم خصم أي أموال حقيقية منك. الهدف هو محاكاة تجربة الإيداع.</p>
+                  </div>
+              </div>
             </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
+          );
+        };
 
-// -----------------------------------------------------------------------------
-// Learn Component (صفحة تعلم التداول)
-// -----------------------------------------------------------------------------
-const Learn = () => {
-    return (
-      <div className="space-y-8">
-        <h2 className="text-3xl font-bold text-gray-800 border-b-2 border-blue-200 pb-4 mb-6">تعلم التداول من الصفر</h2>
 
-        <div className="bg-gray-50 p-6 rounded-xl shadow-md">
-          <h3 className="text-2xl font-semibold text-gray-800 mb-4">ما هو التداول المالي؟</h3>
-          <p className="text-gray-700 leading-relaxed mb-4">
-            ببساطة، <strong>التداول المالي هو عملية شراء وبيع الأصول</strong> المختلفة (مثل الأسهم، العملات، السلع) في الأسواق المالية، بهدف تحقيق ربح من تقلبات أسعارها. الأمر يشبه شراء منتج بسعر منخفض وبيعه بسعر أعلى لتحقيق مكسب.
-          </p>
-          <p className="text-gray-700 leading-relaxed mb-4">
-            <strong className="text-blue-700">اقتباس:</strong> "الاستثمار في المعرفة يدفع أفضل الفوائد."
-          </p>
-          <p className="text-gray-700 leading-relaxed">
-            منصتنا هذه تتيح لك <strong className="text-blue-700">التداول بأموال افتراضية</strong>، مما يعني أنه يمكنك التدرب واكتساب الخبرة وفهم السوق <strong>دون أي مخاطرة مالية حقيقية</strong>. هذه هي أفضل طريقة لتبدأ رحلتك التعليمية.
-          </p>
-          <div className="bg-blue-50 border-r-4 border-blue-500 text-blue-800 p-4 rounded-lg mt-6" role="alert">
-            <p className="font-bold">نصيحة للمبتدئين:</p>
-            <p className="text-sm mt-2">ابدأ دائمًا بالتعلم النظري، ثم طبق ما تعلمته عمليًا على المنصات التجريبية (مثل هذه). لا تندفع للتداول الحقيقي قبل أن تكون مستعدًا تمامًا وتفهم كل الجوانب.</p>
-          </div>
-        </div>
+        // -----------------------------------------------------------------------------
+        // Dashboard Component (اللوحة الرئيسية)
+        // -----------------------------------------------------------------------------
+        const Dashboard = ({ balance, portfolio, marketData, transactions, onTradeClick, setCurrentPage, assetPricesRef }) => {
+          const { formatNumber } = React.useContext(AppContext);
 
-        <div className="bg-gray-50 p-6 rounded-xl shadow-md">
-          <h3 className="text-2xl font-semibold text-gray-800 mb-4">فهم الأسواق المالية وأنواع الأصول</h3>
-          <p className="text-gray-700 leading-relaxed mb-4">
-            الأسواق المالية هي الأماكن التي يلتقي فيها المشترون والبائعون لتداول الأصول. كل سوق يختص بنوع معين من الأصول:
-          </p>
-          <ul className="list-disc list-inside text-gray-700 leading-relaxed space-y-3 pr-4 mb-4">
-            <li>
-              <strong className="text-blue-700">الأسهم:</strong> تمثل حصص ملكية صغيرة في الشركات. عندما تشتري سهمًا، تصبح شريكًا صغيرًا في تلك الشركة.
-              <p className="text-sm text-gray-600 mt-1">
-                <strong className="text-blue-600">مثال:</strong> شراء أسهم في "شركة النور" يعني أنك تمتلك جزءًا منها، وترتفع قيمة أسهمك إذا نمت الشركة.
-              </p>
-            </li>
-            <li>
-              <strong className="text-blue-700">العملات (الفوركس):</strong> هو سوق تداول العملات الأجنبية. يتم تداول العملات في أزواج، مثل اليورو مقابل الدولار الأمريكي (EUR/USD). في هذا السوق، تقاس حركة السعر بوحدة تسمى "البيب" (Pip)، وهي أصغر وحدة تغير في سعر زوج العملات، وتعادل عادةً 0.0001 من قيمة السعر. فهم حركة البيب مهم لحساب الأرباح والخسائر.
-              <p className="text-sm text-gray-600 mt-1">
-                <strong className="text-blue-600">مثال:</strong> إذا ارتفع سعر EUR/USD من 1.0800 إلى 1.0801، فهذا يعني ارتفاع بمقدار 1 بيب.
-              </p>
-            </li>
-            <li>
-              <strong className="text-blue-700">السلع:</strong> تشمل الموارد الطبيعية مثل النفط، الذهب، الفضة، والغاز الطبيعي. أسعارها تتأثر بالعرض والطلب العالمي والأحداث الجيوسياسية.
-              <p className="text-sm text-gray-600 mt-1">
-                <strong className="text-blue-600">مثال:</strong> ارتفاع الطلب على النفط قد يؤدي لارتفاع سعره.
-              </p>
-            </li>
-            <li>
-              <strong className="text-blue-700">العملات الرقمية (الكريبتو):</strong> عملات رقمية مشفرة مثل البيتكوين والإيثيريوم. تتميز بتقلبات سعرية عالية جدًا.
-              <p className="text-sm text-gray-600 mt-1">
-                <strong className="text-blue-600">مثال:</strong> شراء البيتكوين يعني أنك تراهن على زيادة شعبيتها وقيمتها في المستقبل.
-              </p>
-            </li>
-          </ul>
-          <p className="text-gray-700 leading-relaxed">
-            <strong className="text-blue-700">اقتباس:</strong> "المعرفة هي القوة في الأسواق المالية."
-          </p>
-          <div className="bg-yellow-50 border-r-4 border-yellow-500 text-yellow-800 p-4 rounded-lg mt-6" role="alert">
-            <p className="font-bold">توضيح مهم:</p>
-            <p className="text-sm mt-2">لكل نوع أصل عوامل تؤثر عليه. افهم الأساسيات الاقتصادية والسياسية للأصول التي تفكر في تداولها.</p>
-          </div>
-        </div>
+          // حساب القيمة الإجمالية للمحفظة
+          const totalPortfolioValue = Object.keys(portfolio).reduce((sum, asset) => {
+            const holding = portfolio[asset];
+            const currentPrice = marketData[asset] || 0;
+            return sum + (holding.quantity * currentPrice);
+          }, 0) + balance;
 
-        <div className="bg-gray-50 p-6 rounded-xl shadow-md">
-          <h3 className="text-2xl font-semibold text-gray-800 mb-4">إدارة المخاطر: درعك في عالم التداول (مهم جداً!)</h3>
-          <p className="text-gray-700 leading-relaxed mb-4">
-            التداول الحقيقي ينطوي على مخاطر كبيرة، و<strong className="text-red-700">إدارة المخاطر هي أهم مهارة</strong> يجب أن تكتسبها للحفاظ على رأس مالك وتجنب الخسائر الكبيرة.
-          </p>
-          <ul className="list-disc list-inside text-gray-700 leading-relaxed space-y-3 pr-4 mb-4">
-            <li>
-              <strong className="text-red-700">لا تضع كل أموالك في سلة واحدة:</strong> قم بتنويع استثماراتك على عدة أصول مختلفة لتوزيع المخاطر.
-              <p className="text-sm text-gray-600 mt-1">
-                <strong className="text-red-600">توضيح:</strong> إذا انهار سهم واحد، فلن تخسر كل شيء لأنك استثمرت في أصول أخرى.
-              </p>
-            </li>
-            <li>
-              <strong className="text-red-700">استخدم أمر "وقف الخسارة" (Stop Loss):</strong> هذا الأمر يغلق صفقتك تلقائيًا إذا وصل سعر الأصل إلى نقطة معينة تحددها أنت مسبقًا، وذلك للحد من خسائرك المحتملة.
-              <p className="text-sm text-gray-600 mt-1">
-                <strong className="text-red-600">مثال:</strong> إذا اشتريت سهماً بسعر 100$ ووضعت وقف الخسارة عند 95$، فستغلق الصفقة تلقائياً إذا نزل السعر لـ 95$، لتجنب خسارة أكبر.
-              </p>
-            </li>
-            <li>
-              <strong className="text-red-700">حدد "جني الأرباح" (Take Profit):</strong> تمامًا مثل وقف الخسارة، هذا الأمر يغلق الصفقة تلقائيًا عندما تصل الأرباح إلى مستوى محدد مسبقًا، مما يضمن لك تأمين أرباحك.
-              <p className="text-sm text-gray-600 mt-1">
-                <strong className="text-red-600">مثال:</strong> إذا اشتريت سهماً بسعر 100$ ووضعت جني الأرباح عند 110$، فستغلق الصفقة تلقائياً وتحقق ربحاً إذا وصل السعر لـ 110$.
-              </p>
-            </li>
-            <li>
-              <strong className="text-red-700">لا تتداول بأموال لا تستطيع تحمل خسارتها:</strong> استخدم دائمًا جزءًا صغيرًا من رأس مالك الذي لن يؤثر خسارته على حياتك اليومية.
-            </li>
-          </ul>
-          <p className="text-gray-700 leading-relaxed">
-            <strong className="text-red-700">اقتباس:</strong> "القاعدة الأولى في التداول: لا تخسر المال. القاعدة الثانية: لا تنسى القاعدة الأولى."
-          </p>
-          <div className="bg-red-50 border-r-4 border-red-500 text-red-800 p-4 rounded-lg mt-6" role="alert">
-            <p className="font-bold">تحذير بالغ الأهمية:</p>
-            <p className="text-sm mt-2">معظم المتداولين المبتدئين يخسرون أموالهم الحقيقية بسبب عدم فهمهم أو تطبيقهم الصارم لمبادئ إدارة المخاطر. هذا هو أهم درس على الإطلاق في التداول.</p>
-          </div>
-        </div>
+          // حساب الربح/الخسارة غير المحققة (للصفقات المفتوحة)
+          const totalUnrealizedPL = Object.keys(portfolio).reduce((sum, asset) => {
+            const holding = portfolio[asset];
+            const currentPrice = marketData[asset] || 0;
+            return sum + (holding.quantity * (currentPrice - holding.avgPrice));
+          }, 0);
 
-        <div className="bg-gray-50 p-6 rounded-xl shadow-md">
-          <h3 className="text-2xl font-semibold text-gray-800 mb-4">نصائح ذهبية للمتداول العربي المبتدئ</h3>
-          <ul className="list-disc list-inside text-gray-700 leading-relaxed space-y-3 pr-4 mb-4">
-            <li>
-              <strong className="text-green-700">التعليم المستمر:</strong> الأسواق تتغير باستمرار. ابقَ على اطلاع دائم بالأخبار الاقتصادية والمالية وتعلم استراتيجيات جديدة.
-              <p className="text-sm text-gray-600 mt-1">
-                <strong className="text-green-600">توضيح:</strong> خصص وقتًا يوميًا للقراءة والمتابعة، فالتداول ليس مجرد حظ.
-              </p>
-            </li>
-            <li>
-              <strong className="text-green-700">الانضباط العاطفي:</strong> الخوف والطمع هما أكبر عدوين لك في التداول. التزم بخطتك ولا تدع المشاعر تتحكم بقراراتك.
-              <p className="text-sm text-gray-600 mt-1">
-                <strong className="text-green-600">توضيح:</strong> لا تطارد الأرباح السريعة ولا تبتئس من الخسائر الصغيرة. التزم بالخطة.
-              </p>
-            </li>
-            <li>
-              <strong className="text-green-700">البدء الصغير:</strong> عند الانتقال للتداول الحقيقي، ابدأ بمبلغ صغير جدًا يمكنك تحمل خسارته بالكامل.
-              <p className="text-sm text-gray-600 mt-1">
-                <strong className="text-green-600">توضيح:</strong> الهدف في البداية هو التعلم بالمال الحقيقي وليس تحقيق الثراء.
-              </p>
-            </li>
-            <li>
-              <strong className="text-green-700">تحليل الأخطاء:</strong> احتفظ بسجل لجميع صفقاتك (الرابحة والخاسرة) وراجعها بانتظام لتحديد نقاط القوة والضعف في استراتيجيتك.
-            </li>
-            <li>
-              <strong className="text-green-700">لا تتبع التوصيات بشكل أعمى:</strong> قم ببحثك وتحليلك الخاص. حتى لو كانت التوصية من مصدر موثوق، يجب أن تفهم لماذا تتخذ هذه الصفقة.
-            </li>
-          </ul>
-          <p className="text-gray-700 leading-relaxed">
-            <strong className="text-green-700">اقتباس:</strong> "ليس المهم عدد المرات التي تسقط فيها، بل عدد المرات التي تنهض فيها."
-          </p>
-        </div>
+          // لتحديد لون الربح/الخسارة (أخضر للربح، أحمر للخسارة)
+          const getPLColor = (pl) => {
+            if (pl > 0) return 'text-green-600';
+            if (pl < 0) return 'text-red-600';
+            return 'text-gray-700';
+          };
 
-        <div className="bg-gray-50 p-6 rounded-xl shadow-md">
-          <h3 className="text-2xl font-semibold text-gray-800 mb-4">مصطلحات تداول أساسية يجب أن تعرفها</h3>
-          <ul className="list-disc list-inside text-gray-700 leading-relaxed space-y-2 pr-4">
-            <li><strong className="text-purple-700">الرصيد الافتراضي:</strong> المبلغ النقدي الافتراضي المتاح لك للتداول في هذه المنصة.</li>
-            <li><strong className="text-purple-700">الأصل (Asset):</strong> أي شيء يتم تداوله، مثل سهم، عملة، سلعة، أو عملة رقمية.</li>
-            <li><strong className="text-purple-700">سعر الشراء (Bid Price):</strong> السعر الذي يمكنك عنده بيع الأصل (السعر الذي يرغب المشترون في دفعه).</li>
-            <li><strong className="text-purple-700">سعر البيع (Ask Price):</strong> السعر الذي يمكنك عنده شراء الأصل (السعر الذي يرغب البائعون في بيعه).</li>
-            <li><strong className="text-purple-700">الفرق السعري (Spread):</strong> الفرق بين سعر الشراء وسعر البيع. هذا هو جزء من تكلفة التداول.</li>
-            <li><strong className="text-purple-700">الربح المحقق (Realized Profit/Loss):</strong> الربح أو الخسارة التي تتحقق بعد إغلاق الصفقة بالكامل.</li>
-            <li><strong className="text-purple-700">الربح غير المحقق (Unrealized Profit/Loss):</strong> الربح أو الخسارة الحالية لصفقة لا تزال مفتوحة (تتغير مع تغير السعر).</li>
-            <li><strong className="text-purple-700">المحفظة (Portfolio):</strong> مجموع كل الأصول التي تمتلكها (سواء نقدية أو في شكل أصول مفتوحة).</li>
-            <li><strong className="text-purple-700">الرافعة المالية (Leverage):</strong> أداة تسمح لك بالتداول بمبالغ أكبر من رأس مالك الفعلي، ولكنها تزيد المخاطر بشكل كبير. لا ينصح بها للمبتدئين إلا بعد فهم كامل لمخاطرها.</li>
-            <li><strong className="text-purple-700">التقلب (Volatility):</strong> مدى سرعة وكبر تغير سعر الأصل. الأصول ذات التقلب العالي تحمل مخاطر وفرص أكبر.</li>
-            <li><strong className="text-purple-700">النقطة (Pip):</strong> وحدة قياس حركة السعر في أزواج العملات (الفوركس). كل حركة صغيرة في السعر تقاس بالبيبات، وتؤثر بشكل مباشر على الربح أو الخسارة.</li>
-          </ul>
-          <div className="bg-purple-50 border-r-4 border-purple-500 text-purple-800 p-4 rounded-lg mt-6" role="alert">
-            <p className="font-bold">تذكر:</p>
-            <p className="text-sm mt-2">فهم هذه المصطلحات هو أساس فهمك للتداول. لا تخف من العودة إليها مراراً حتى تترسخ في ذهنك.</p>
-          </div>
-        </div>
-      </div>
-    );
-  };
+          // اقتباسات عالمية للتداول والمال لعرضها في الشريط المتحرك
+          const quotes = [
+            "الاستثمار في المعرفة يدفع أفضل الفوائد. - بنجامين فرانكلين",
+            "لا تضع كل البيض في سلة واحدة. - مثل قديم",
+            "المخاطرة تأتي من عدم معرفة ما تفعله. - وارن بافيت",
+            "السوق هو آلة لنقل الأموال من الصبور إلى عديم الصبر. - وارن بافيت",
+            "القاعدة الأولى: لا تخسر المال. القاعدة الثانية: لا تنسى القاعدة الأولى. - وارن بافيت",
+            "النجاح في التداول لا يأتي من التكهنات، بل من التحليل الصبور. - مصدر مجهول",
+            "المال ليس غاية، بل وسيلة لغاية أسمى. - مثل عربي",
+            "فكر كأنه لا يوجد غد، ولكن تداول كأنك ستتداول للأبد. - مصدر مجهول",
+            "الفرص في السوق لا تنفد أبداً، لكن المال سينفد إذا لم تكن حكيماً. - مصدر مجهول",
+            "التداول الناجح هو 90% إدارة مخاطر، 10% تداول. - مصدر مجهول",
+          ];
+
+          const [currentQuoteIndex, setCurrentQuoteIndex] = React.useState(0);
+
+          // مؤقت لتغيير الاقتباس في الشريط المتحرك
+          React.useEffect(() => {
+            const quoteInterval = setInterval(() => {
+              setCurrentQuoteIndex(prevIndex => (prevIndex + 1) % quotes.length);
+            }, 5000); // تغيير الاقتباس كل 5 ثواني
+            return () => clearInterval(quoteInterval);
+          }, []);
+
+          return (
+            <div className="space-y-6">
+              <h2 className="text-3xl font-bold text-gray-800 border-b-2 border-blue-200 pb-4 mb-6">اللوحة الرئيسية</h2>
+
+              {/* Quote Ticker (شريط الاقتباسات المتحرك) */}
+              <div className="bg-blue-100 text-blue-800 p-4 rounded-xl shadow-inner text-center font-semibold overflow-hidden relative">
+                <p className="animate-scroll-text whitespace-nowrap text-lg">
+                  {quotes[currentQuoteIndex]}
+                </p>
+                {/* CSS for the scrolling animation */}
+                <style jsx>{`
+                  @keyframes scrollText {
+                    0% { transform: translateX(100%); }
+                    100% { transform: translateX(-100%); }
+                  }
+                  .animate-scroll-text {
+                    animation: scrollText 30s linear infinite; /* مدة الحركة 30 ثانية */
+                    animation-delay: -${currentQuoteIndex * 3}s; /* لضبط بداية الاقتباس الأول */
+                  }
+                `}</style>
+              </div>
+
+
+              {/* Overview Cards (بطاقات النظرة العامة) */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="bg-gradient-to-br from-blue-600 to-blue-800 text-white p-6 rounded-xl shadow-lg text-center transform hover:scale-105 transition-transform duration-300">
+                  <p className="text-lg opacity-90">رصيدك الافتراضي</p>
+                  <p className="text-4xl font-extrabold mt-2">{formatNumber(balance)} $</p>
+                  <p className="text-sm opacity-80 mt-1">المبلغ المتاح للتداول</p>
+                  {balance === 0 && ( // زر "إيداع الأموال" يظهر فقط إذا كان الرصيد صفر
+                    <button
+                      onClick={() => setCurrentPage('deposit')}
+                      className="mt-4 bg-white text-blue-700 px-4 py-2 rounded-lg font-bold hover:bg-blue-100 transition-colors shadow-md"
+                    >
+                      إيداع أموال الآن
+                    </button>
+                  )}
+                </div>
+                <div className="bg-white p-6 rounded-xl shadow-lg text-center transform hover:scale-105 transition-transform duration-300">
+                  <p className="text-lg text-gray-600">القيمة الإجمالية للمحفظة</p>
+                  <p className="text-4xl font-extrabold mt-2 text-gray-800">{formatNumber(totalPortfolioValue)} $</p>
+                  <p className="text-sm text-gray-500 mt-1">رصيدك النقدي + قيمة أصولك</p>
+                </div>
+                <div className={`bg-white p-6 rounded-xl shadow-lg text-center transform hover:scale-105 transition-transform duration-300 ${getPLColor(totalUnrealizedPL)}`}>
+                  <p className="text-lg text-gray-600">الربح/الخسارة غير المحققة</p>
+                  <p className="text-4xl font-extrabold mt-2">{formatNumber(totalUnrealizedPL)} $</p>
+                  <p className="text-sm text-gray-500 mt-1">أرباح أو خسائر الأصول المفتوحة</p>
+                </div>
+              </div>
+
+              {/* Market Snapshot (نظرة سريعة على الأسواق) */}
+              <div className="bg-gray-50 p-6 rounded-xl shadow-md">
+                <h3 className="text-2xl font-semibold text-gray-800 mb-4">نظرة سريعة على الأسواق</h3>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full bg-white rounded-lg overflow-hidden border border-gray-200">
+                    <thead className="bg-gray-200">
+                      <tr>
+                        <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">الأصل</th>
+                        <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">السعر الحالي</th>
+                        <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">التغيير (2ث)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {Object.entries(marketData).slice(0, 5).map(([asset, currentPrice]) => { // عرض 5 أصول فقط
+                        const prevPrice = assetPricesRef.current[asset];
+                        const change = currentPrice - prevPrice;
+                        const changePercent = prevPrice ? (change / prevPrice) * 100 : 0;
+                        const changeColor = getPLColor(change);
+
+                        return (
+                          <tr key={asset} className="hover:bg-gray-50 transition-colors">
+                            <td className="py-3 px-4 whitespace-nowrap text-gray-800 font-medium">{asset}</td>
+                            <td className="py-3 px-4 whitespace-nowrap text-gray-700">{formatNumber(currentPrice)} $</td>
+                            <td className={`py-3 px-4 whitespace-nowrap ${changeColor}`}>
+                              {change > 0 ? '▲' : (change < 0 ? '▼' : '')} {formatNumber(change)} ({changePercent.toFixed(2)}%)
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-sm text-gray-500 mt-4 text-right">ملاحظة: الأسعار يتم تحديثها كل ثانيتين وهي افتراضية.</p>
+              </div>
+
+              {/* My Portfolio Summary (ملخص محفظتي الافتراضية) */}
+              <div className="bg-gray-50 p-6 rounded-xl shadow-md">
+                <h3 className="text-2xl font-semibold text-gray-800 mb-4">محفظتي الافتراضية</h3>
+                {Object.keys(portfolio).length === 0 ? (
+                  <p className="text-gray-600 text-center py-4">محفظتك فارغة. <button onClick={onTradeClick} className="text-blue-600 hover:underline font-semibold">ابدأ التداول الآن!</button></p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full bg-white rounded-lg overflow-hidden border border-gray-200">
+                      <thead className="bg-gray-200">
+                        <tr>
+                          <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">الأصل</th>
+                          <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">الكمية</th>
+                          <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">متوسط سعر الشراء</th>
+                          <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">الربح/الخسارة</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {Object.entries(portfolio).map(([asset, holding]) => {
+                          const currentPrice = marketData[asset] || 0;
+                          const unrealizedPL = (holding.quantity * (currentPrice - holding.avgPrice));
+                          const plColor = getPLColor(unrealizedPL);
+
+                          return (
+                            <tr key={asset} className="hover:bg-gray-50 transition-colors">
+                              <td className="py-3 px-4 whitespace-nowrap text-gray-800 font-medium">{asset}</td>
+                              <td className="py-3 px-4 whitespace-nowrap text-gray-700">{formatNumber(holding.quantity)}</td>
+                              <td className="py-3 px-4 whitespace-nowrap text-gray-700">{formatNumber(holding.avgPrice)} $</td>
+                              <td className={`py-3 px-4 whitespace-nowrap ${plColor}`}>{formatNumber(unrealizedPL)} $</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Recent Transactions (سجل العمليات الأخيرة) */}
+              <div className="bg-gray-50 p-6 rounded-xl shadow-md">
+                <h3 className="text-2xl font-semibold text-gray-800 mb-4">سجل العمليات الأخيرة</h3>
+                {transactions.length === 0 ? (
+                  <p className="text-gray-600 text-center py-4">لم تقم بأي عمليات تداول بعد.</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full bg-white rounded-lg overflow-hidden border border-gray-200">
+                      <thead className="bg-gray-200">
+                        <tr>
+                          <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">النوع</th>
+                          <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">الأصل</th>
+                          <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">الكمية</th>
+                          <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">السعر</th>
+                          <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">التاريخ والوقت</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {transactions.slice().reverse().slice(0, 5).map((tx, index) => ( // عرض 5 عمليات حديثة فقط
+                          <tr key={index} className="hover:bg-gray-50 transition-colors">
+                            <td className={`py-3 px-4 whitespace-nowrap font-medium ${tx.type === 'شراء' || tx.type === 'إيداع' ? 'text-green-600' : 'text-red-600'}`}>
+                              {tx.type}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap text-gray-800">{tx.asset}</td>
+                            <td className="py-3 px-4 whitespace-nowrap text-gray-700">{formatNumber(tx.quantity)}</td>
+                            <td className="py-3 px-4 whitespace-nowrap text-gray-700">{formatNumber(tx.price)} $</td>
+                            <td className="py-3 px-4 whitespace-nowrap text-gray-500 text-sm">{tx.timestamp}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {transactions.length > 5 && ( // زر لعرض المزيد إذا كان هناك المزيد من العمليات
+                    <p className="text-sm text-center text-blue-600 mt-4 cursor-pointer hover:underline" onClick={() => setCurrentPage('dashboard')}>
+                      عرض المزيد من العمليات...
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        };
+
+        // -----------------------------------------------------------------------------
+        // Markets Component (صفحة الأسواق)
+        // -----------------------------------------------------------------------------
+        const Markets = ({ marketData, assetPricesRef }) => {
+            const { formatNumber } = React.useContext(AppContext);
+            // لتحديد لون الربح/الخسارة (أخضر للربح، أحمر للخسارة)
+            const getPLColor = (pl) => {
+              if (pl > 0) return 'text-green-600';
+              if (pl < 0) return 'text-red-600';
+              return 'text-gray-700';
+            };
+
+            return (
+              <div className="space-y-6">
+                <h2 className="text-3xl font-bold text-gray-800 border-b-2 border-blue-200 pb-4 mb-6">الأسواق المالية</h2>
+
+                <div className="bg-gray-50 p-6 rounded-xl shadow-md">
+                  <p className="text-gray-700 leading-relaxed mb-4">
+                    هنا يمكنك استعراض أسعار الأصول المختلفة المتاحة للتداول في هذه المنصة التجريبية. الأسعار تتغير باستمرار لتعكس ظروف السوق الافتراضية.
+                  </p>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full bg-white rounded-lg overflow-hidden border border-gray-200">
+                      <thead className="bg-gray-200">
+                        <tr>
+                          <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">الأصل</th>
+                          <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">السعر الحالي</th>
+                          <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">تغيير (2ث)</th>
+                          <th className="py-3 px-4 text-right text-sm font-medium text-gray-600 uppercase tracking-wider">النوع</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {Object.entries(marketData).map(([asset, currentPrice]) => {
+                          const prevPrice = assetPricesRef.current[asset];
+                          const change = currentPrice - prevPrice;
+                          const changePercent = prevPrice ? (change / prevPrice) * 100 : 0;
+                          const changeColor = getPLColor(change);
+
+                          // تحديد نوع الأصل للعرض
+                          let assetType = 'متنوع';
+                          if (asset.includes('أسهم شركة')) assetType = 'أسهم';
+                          else if (asset.includes('الدولار') || asset.includes('الين') || asset.includes('الإسترليني')) assetType = 'عملات (فوركس)';
+                          else if (asset.includes('النفط') || asset.includes('الغاز') || asset.includes('الذهب') || asset.includes('الفضة')) assetType = 'سلع';
+                          else if (asset.includes('الرقمية') || asset.includes('البيتكوين') || asset.includes('الإيثيريوم')) assetType = 'عملات رقمية';
+
+                          return (
+                            <tr key={asset} className="hover:bg-gray-50 transition-colors">
+                              <td className="py-3 px-4 whitespace-nowrap text-gray-800 font-medium">{asset}</td>
+                              <td className="py-3 px-4 whitespace-nowrap text-gray-700">{formatNumber(currentPrice)} $</td>
+                              <td className={`py-3 px-4 whitespace-nowrap ${changeColor}`}>
+                                {change > 0 ? '▲' : (change < 0 ? '▼' : '')} {formatNumber(change)} ({changePercent.toFixed(2)}%)
+                              </td>
+                              <td className="py-3 px-4 whitespace-nowrap text-gray-600 text-sm">{assetType}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="bg-blue-50 border-r-4 border-blue-500 text-blue-800 p-4 rounded-lg mt-6" role="alert">
+                    <p className="font-bold">ملاحظة هامة:</p>
+                    <p className="text-sm mt-2">تقلبات الأسعار في الأسواق الحقيقية يمكن أن تكون سريعة وكبيرة. هذه المحاكاة تهدف لتعريفك بالمفهوم العام فقط.</p>
+                  </div>
+                </div>
+              </div>
+            );
+          };
+
+        // -----------------------------------------------------------------------------
+        // Trade Component (صفحة التداول)
+        // -----------------------------------------------------------------------------
+        const Trade = ({ marketData, onBuy, onSell, balance, portfolio }) => {
+            const { showMessage, formatNumber } = React.useContext(AppContext);
+            const [selectedAsset, setSelectedAsset] = React.useState(''); // الأصل المختار للتداول
+            const [quantity, setQuantity] = React.useState(''); // الكمية المراد تداولها
+
+            // تعيين الأصل الافتراضي عند تحميل المكون
+            React.useEffect(() => {
+              if (Object.keys(marketData).length > 0 && !selectedAsset) {
+                setSelectedAsset(Object.keys(marketData)[0]);
+              }
+            }, [marketData, selectedAsset]);
+
+            const currentPrice = selectedAsset ? marketData[selectedAsset] : 0;
+            const estimatedCost = currentPrice * parseFloat(quantity || 0); // التكلفة التقديرية للصفقة
+            const holding = portfolio[selectedAsset] || { quantity: 0, avgPrice: 0 }; // الكمية المملوكة من الأصل المختار
+
+            // معالجة تغيير الكمية المدخلة
+            const handleQuantityChange = (e) => {
+              const value = e.target.value;
+              // السماح فقط بالأرقام والقيم الموجبة والعشرية
+              if (/^\d*\.?\d*$/.test(value) && parseFloat(value) >= 0) {
+                setQuantity(value);
+              }
+            };
+
+            // معالجة النقر على زر الشراء
+            const handleBuyClick = () => {
+              const qtyNum = parseFloat(quantity);
+              if (!selectedAsset) {
+                showMessage('الرجاء اختيار أصل للتداول أولاً.', 'error');
+                return;
+              }
+              if (isNaN(qtyNum) || qtyNum <= 0) {
+                showMessage('الرجاء إدخال كمية صحيحة وموجبة.', 'error');
+                return;
+              }
+              if (balance < estimatedCost) { // التحقق من الرصيد الكافي
+                  showMessage('رصيدك الافتراضي غير كافٍ لإتمام هذه الصفقة.', 'error');
+                  return;
+              }
+              onBuy(selectedAsset, qtyNum); // تنفيذ عملية الشراء
+              setQuantity(''); // مسح حقل الكمية
+            };
+
+            // معالجة النقر على زر البيع
+            const handleSellClick = () => {
+              const qtyNum = parseFloat(quantity);
+              if (!selectedAsset) {
+                showMessage('الرجاء اختيار أصل للتداول أولاً.', 'error');
+                return;
+              }
+              if (isNaN(qtyNum) || qtyNum <= 0) {
+                showMessage('الرجاء إدخال كمية صحيحة وموجبة.', 'error');
+                return;
+              }
+              if (holding.quantity < qtyNum) { // التحقق من امتلاك الكمية الكافية
+                  showMessage('ليس لديك كمية كافية من هذا الأصل للبيع.', 'error');
+                  return;
+              }
+              onSell(selectedAsset, qtyNum); // تنفيذ عملية البيع
+              setQuantity(''); // مسح حقل الكمية
+            };
+
+            return (
+              <div className="space-y-6">
+                <h2 className="text-3xl font-bold text-gray-800 border-b-2 border-blue-200 pb-4 mb-6">صفحة التداول</h2>
+
+                <div className="bg-gray-50 p-6 rounded-xl shadow-md flex flex-col md:flex-row gap-6">
+                  {/* Market Data & Selection (بيانات السوق واختيار الأصل) */}
+                  <div className="flex-1 space-y-4">
+                    <p className="text-lg text-gray-700 mb-4">
+                      رصيدك الافتراضي المتاح: <span className="font-extrabold text-blue-600 text-2xl">{formatNumber(balance)} $</span>
+                    </p>
+
+                    <div>
+                      <label htmlFor="asset-select" className="block text-gray-700 text-lg font-medium mb-2">اختر الأصل للتداول:</label>
+                      <select
+                        id="asset-select"
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white shadow-sm text-gray-800 text-lg"
+                        value={selectedAsset}
+                        onChange={(e) => {
+                          setSelectedAsset(e.target.value);
+                          setQuantity(''); // إعادة تعيين الكمية عند تغيير الأصل
+                        }}
+                      >
+                        <option value="" disabled>الرجاء الاختيار...</option>
+                        {Object.keys(marketData).map(asset => (
+                          <option key={asset} value={asset}>{asset}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {selectedAsset && ( // عرض معلومات الأصل المختار
+                      <div className="border border-gray-200 p-4 rounded-lg bg-white shadow-sm">
+                        <h4 className="text-xl font-semibold text-gray-800 mb-2">معلومات الأصل: <span className="text-blue-700">{selectedAsset}</span></h4>
+                        <p className="text-lg text-gray-700">السعر الحالي: <span className="font-bold text-green-600 text-xl">{formatNumber(currentPrice)} $</span></p>
+                        <p className="text-md text-gray-600">
+                          الكمية المملوكة: <span className="font-bold text-gray-800">{formatNumber(holding.quantity)}</span>
+                          {holding.quantity > 0 && ` (متوسط سعر الشراء: ${formatNumber(holding.avgPrice)} $)`}
+                        </p>
+                        <p className="text-sm text-gray-500 mt-2">السعر يتحدث باستمرار لمحاكاة ظروف السوق الحقيقية.</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Trade Controls (عناصر تحكم التداول) */}
+                  <div className="flex-1 space-y-4">
+                    <h3 className="text-2xl font-semibold text-gray-800 mb-2">تنفيذ عملية تداول</h3>
+                    <div>
+                      <label htmlFor="quantity-input" className="block text-gray-700 text-lg font-medium mb-2">الكمية:</label>
+                      <input
+                        id="quantity-input"
+                        type="number"
+                        value={quantity}
+                        onChange={handleQuantityChange}
+                        placeholder="أدخل الكمية"
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 shadow-sm text-gray-800 text-lg"
+                        min="0"
+                        step="0.01"
+                      />
+                    </div>
+
+                    <div className="bg-white p-4 rounded-lg shadow-sm">
+                      <p className="text-lg text-gray-700">التكلفة التقديرية / الإيرادات: <span className="font-extrabold text-purple-700 text-2xl">{formatNumber(estimatedCost)} $</span></p>
+                      <p className="text-sm text-gray-500 mt-1">هذه القيمة تقديرية وقد تتغير قليلاً وقت التنفيذ الفعلي بسبب تقلبات الأسعار.</p>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row gap-4">
+                      <button
+                        onClick={handleBuyClick}
+                        disabled={!selectedAsset || parseFloat(quantity) <= 0 || balance < estimatedCost}
+                        className="flex-1 bg-green-600 text-white p-4 rounded-xl font-bold text-xl hover:bg-green-700 transition-all duration-300 shadow-md enabled:hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        شراء
+                      </button>
+                      <button
+                        onClick={handleSellClick}
+                        disabled={!selectedAsset || parseFloat(quantity) <= 0 || holding.quantity < parseFloat(quantity)}
+                        className="flex-1 bg-red-600 text-white p-4 rounded-xl font-bold text-xl hover:bg-red-700 transition-all duration-300 shadow-md enabled:hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        بيع
+                      </button>
+                    </div>
+
+                    {/* Important notes for beginners (نصائح هامة للمبتدئين) */}
+                    <div className="bg-yellow-50 border-r-4 border-yellow-500 text-yellow-800 p-4 rounded-lg mt-4" role="alert">
+                      <p className="font-bold">نصائح هامة للمبتدئين:</p>
+                      <ul className="list-disc list-inside text-sm mt-2 space-y-1 pr-4">
+                        <li><strong className="text-yellow-700">التكلفة والكمية:</strong> قبل الشراء، تأكد أن رصيدك الافتراضي كافٍ لتغطية التكلفة التقديرية. قبل البيع، تأكد أنك تمتلك الكمية الكافية من الأصل.</li>
+                        <li><strong className="text-yellow-700">القرارات المدروسة:</strong> لا تضغط على "شراء" أو "بيع" إلا بعد أن تكون متأكداً من قرارك وخطتك.</li>
+                        <li><strong className="text-yellow-700">المخاطر والتعلم:</strong> التداول يتطلب دراسة وفهم عميق للمخاطر. هذه المنصة للمحاكاة والتعلم، وليست للتداول بأموال حقيقية.</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          };
+
+        // -----------------------------------------------------------------------------
+        // Learn Component (صفحة تعلم التداول)
+        // -----------------------------------------------------------------------------
+        const Learn = () => {
+            return (
+              <div className="space-y-8">
+                <h2 className="text-3xl font-bold text-gray-800 border-b-2 border-blue-200 pb-4 mb-6">تعلم التداول من الصفر</h2>
+
+                <div className="bg-gray-50 p-6 rounded-xl shadow-md">
+                  <h3 className="text-2xl font-semibold text-gray-800 mb-4">ما هو التداول المالي؟</h3>
+                  <p className="text-gray-700 leading-relaxed mb-4">
+                    ببساطة، <strong>التداول المالي هو عملية شراء وبيع الأصول</strong> المختلفة (مثل الأسهم، العملات، السلع) في الأسواق المالية، بهدف تحقيق ربح من تقلبات أسعارها. الأمر يشبه شراء منتج بسعر منخفض وبيعه بسعر أعلى لتحقيق مكسب.
+                  </p>
+                  <p className="text-gray-700 leading-relaxed mb-4">
+                    <strong className="text-blue-700">اقتباس:</strong> "الاستثمار في المعرفة يدفع أفضل الفوائد."
+                  </p>
+                  <p className="text-gray-700 leading-relaxed">
+                    منصتنا هذه تتيح لك <strong className="text-blue-700">التداول بأموال افتراضية</strong>، مما يعني أنه يمكنك التدرب واكتساب الخبرة وفهم السوق <strong>دون أي مخاطرة مالية حقيقية</strong>. هذه هي أفضل طريقة لتبدأ رحلتك التعليمية.
+                  </p>
+                  <div className="bg-blue-50 border-r-4 border-blue-500 text-blue-800 p-4 rounded-lg mt-6" role="alert">
+                    <p className="font-bold">نصيحة للمبتدئين:</p>
+                    <p className="text-sm mt-2">ابدأ دائمًا بالتعلم النظري، ثم طبق ما تعلمته عمليًا على المنصات التجريبية (مثل هذه). لا تندفع للتداول الحقيقي قبل أن تكون مستعدًا تمامًا وتفهم كل الجوانب.</p>
+                  </div>
+                </div>
+
+                <div className="bg-gray-50 p-6 rounded-xl shadow-md">
+                  <h3 className="text-2xl font-semibold text-gray-800 mb-4">فهم الأسواق المالية وأنواع الأصول</h3>
+                  <p className="text-gray-700 leading-relaxed mb-4">
+                    الأسواق المالية هي الأماكن التي يلتقي فيها المشترون والبائعون لتداول الأصول. كل سوق يختص بنوع معين من الأصول:
+                  </p>
+                  <ul className="list-disc list-inside text-gray-700 leading-relaxed space-y-3 pr-4 mb-4">
+                    <li>
+                      <strong className="text-blue-700">الأسهم:</strong> تمثل حصص ملكية صغيرة في الشركات. عندما تشتري سهمًا، تصبح شريكًا صغيرًا في تلك الشركة.
+                      <p className="text-sm text-gray-600 mt-1">
+                        <strong className="text-blue-600">مثال:</strong> شراء أسهم في "شركة النور" يعني أنك تمتلك جزءًا منها، وترتفع قيمة أسهمك إذا نمت الشركة.
+                      </p>
+                    </li>
+                    <li>
+                      <strong className="text-blue-700">العملات (الفوركس):</strong> هو سوق تداول العملات الأجنبية. يتم تداول العملات في أزواج، مثل اليورو مقابل الدولار الأمريكي (EUR/USD). في هذا السوق، تقاس حركة السعر بوحدة تسمى "البيب" (Pip)، وهي أصغر وحدة تغير في سعر زوج العملات، وتعادل عادةً 0.0001 من قيمة السعر. فهم حركة البيب مهم لحساب الأرباح والخسائر.
+                      <p className="text-sm text-gray-600 mt-1">
+                        <strong className="text-blue-600">مثال:</strong> إذا ارتفع سعر EUR/USD من 1.0800 إلى 1.0801، فهذا يعني ارتفاع بمقدار 1 بيب.
+                      </p>
+                    </li>
+                    <li>
+                      <strong className="text-blue-700">السلع:</strong> تشمل الموارد الطبيعية مثل النفط، الذهب، الفضة، والغاز الطبيعي. أسعارها تتأثر بالعرض والطلب العالمي والأحداث الجيوسياسية.
+                      <p className="text-sm text-gray-600 mt-1">
+                        <strong className="text-blue-600">مثال:</strong> ارتفاع الطلب على النفط قد يؤدي لارتفاع سعره.
+                      </p>
+                    </li>
+                    <li>
+                      <strong className="text-blue-700">العملات الرقمية (الكريبتو):</strong> عملات رقمية مشفرة مثل البيتكوين والإيثيريوم. تتميز بتقلبات سعرية عالية جدًا.
+                      <p className="text-sm text-gray-600 mt-1">
+                        <strong className="text-blue-600">مثال:</strong> شراء البيتكوين يعني أنك تراهن على زيادة شعبيتها وقيمتها في المستقبل.
+                      </p>
+                    </li>
+                  </ul>
+                  <p className="text-gray-700 leading-relaxed">
+                    <strong className="text-blue-700">اقتباس:</strong> "المعرفة هي القوة في الأسواق المالية."
+                  </p>
+                  <div className="bg-yellow-50 border-r-4 border-yellow-500 text-yellow-800 p-4 rounded-lg mt-6" role="alert">
+                    <p className="font-bold">توضيح مهم:</p>
+                    <p className="text-sm mt-2">لكل نوع أصل عوامل تؤثر عليه. افهم الأساسيات الاقتصادية والسياسية للأصول التي تفكر في تداولها.</p>
+                  </div>
+                </div>
+
+                <div className="bg-gray-50 p-6 rounded-xl shadow-md">
+                  <h3 className="text-2xl font-semibold text-gray-800 mb-4">إدارة المخاطر: درعك في عالم التداول (مهم جداً!)</h3>
+                  <p className="text-gray-700 leading-relaxed mb-4">
+                    التداول الحقيقي ينطوي على مخاطر كبيرة، و<strong className="text-red-700">إدارة المخاطر هي أهم مهارة</strong> يجب أن تكتسبها للحفاظ على رأس مالك وتجنب الخسائر الكبيرة.
+                  </p>
+                  <ul className="list-disc list-inside text-gray-700 leading-relaxed space-y-3 pr-4 mb-4">
+                    <li>
+                      <strong className="text-red-700">لا تضع كل أموالك في سلة واحدة:</strong> قم بتنويع استثماراتك على عدة أصول مختلفة لتوزيع المخاطر.
+                      <p className="text-sm text-gray-600 mt-1">
+                        <strong className="text-red-600">توضيح:</strong> إذا انهار سهم واحد، فلن تخسر كل شيء لأنك استثمرت في أصول أخرى.
+                      </p>
+                    </li>
+                    <li>
+                      <strong className="text-red-700">استخدم أمر "وقف الخسارة" (Stop Loss):</strong> هذا الأمر يغلق صفقتك تلقائيًا إذا وصل سعر الأصل إلى نقطة معينة تحددها أنت مسبقًا، وذلك للحد من خسائرك المحتملة.
+                      <p className="text-sm text-gray-600 mt-1">
+                        <strong className="text-red-600">مثال:</strong> إذا اشتريت سهماً بسعر 100$ ووضعت وقف الخسارة عند 95$، فستغلق الصفقة تلقائياً إذا نزل السعر لـ 95$، لتجنب خسارة أكبر.
+                      </p>
+                    </li>
+                    <li>
+                      <strong className="text-red-700">حدد "جني الأرباح" (Take Profit):</strong> تمامًا مثل وقف الخسارة، هذا الأمر يغلق الصفقة تلقائيًا عندما تصل الأرباح إلى مستوى محدد مسبقًا، مما يضمن لك تأمين أرباحك.
+                      <p className="text-sm text-gray-600 mt-1">
+                        <strong className="text-red-600">مثال:</strong> إذا اشتريت سهماً بسعر 100$ ووضعت جني الأرباح عند 110$، فستغلق الصفقة تلقائياً وتحقق ربحاً إذا وصل السعر لـ 110$.
+                      </p>
+                    </li>
+                    <li>
+                      <strong className="text-red-700">لا تتداول بأموال لا تستطيع تحمل خسارتها:</strong> استخدم دائمًا جزءًا صغيرًا من رأس مالك الذي لن يؤثر خسارته على حياتك اليومية.
+                    </li>
+                  </ul>
+                  <p className="text-gray-700 leading-relaxed">
+                    <strong className="text-red-700">اقتباس:</strong> "القاعدة الأولى في التداول: لا تخسر المال. القاعدة الثانية: لا تنسى القاعدة الأولى."
+                  </p>
+                  <div className="bg-red-50 border-r-4 border-red-500 text-red-800 p-4 rounded-lg mt-6" role="alert">
+                    <p className="font-bold">تحذير بالغ الأهمية:</p>
+                    <p className="text-sm mt-2">معظم المتداولين المبتدئين يخسرون أموالهم الحقيقية بسبب عدم فهمهم أو تطبيقهم الصارم لمبادئ إدارة المخاطر. هذا هو أهم درس على الإطلاق في التداول.</p>
+                  </div>
+                </div>
+
+                <div className="bg-gray-50 p-6 rounded-xl shadow-md">
+                  <h3 className="text-2xl font-semibold text-gray-800 mb-4">نصائح ذهبية للمتداول العربي المبتدئ</h3>
+                  <ul className="list-disc list-inside text-gray-700 leading-relaxed space-y-3 pr-4 mb-4">
+                    <li>
+                      <strong className="text-green-700">التعليم المستمر:</strong> الأسواق تتغير باستمرار. ابقَ على اطلاع دائم بالأخبار الاقتصادية والمالية وتعلم استراتيجيات جديدة.
+                      <p className="text-sm text-gray-600 mt-1">
+                        <strong className="text-green-600">توضيح:</strong> خصص وقتًا يوميًا للقراءة والمتابعة، فالتداول ليس مجرد حظ.
+                      </p>
+                    </li>
+                    <li>
+                      <strong className="text-green-700">الانضباط العاطفي:</strong> الخوف والطمع هما أكبر عدوين لك في التداول. التزم بخطتك ولا تدع المشاعر تتحكم بقراراتك.
+                      <p className="text-sm text-gray-600 mt-1">
+                        <strong className="text-green-600">توضيح:</strong> لا تطارد الأرباح السريعة ولا تبتئس من الخسائر الصغيرة. التزم بالخطة.
+                      </p>
+                    </li>
+                    <li>
+                      <strong className="text-green-700">البدء الصغير:</strong> عند الانتقال للتداول الحقيقي، ابدأ بمبلغ صغير جدًا يمكنك تحمل خسارته بالكامل.
+                      <p className="text-sm text-gray-600 mt-1">
+                        <strong className="text-green-600">توضيح:</strong> الهدف في البداية هو التعلم بالمال الحقيقي وليس تحقيق الثراء.
+                      </p>
+                    </li>
+                    <li>
+                      <strong className="text-green-700">تحليل الأخطاء:</strong> احتفظ بسجل لجميع صفقاتك (الرابحة والخاسرة) وراجعها بانتظام لتحديد نقاط القوة والضعف في استراتيجيتك.
+                    </li>
+                    <li>
+                      <strong className="text-green-700">لا تتبع التوصيات بشكل أعمى:</strong> قم ببحثك وتحليلك الخاص. حتى لو كانت التوصية من مصدر موثوق، يجب أن تفهم لماذا تتخذ هذه الصفقة.
+                    </li>
+                  </ul>
+                  <p className="text-gray-700 leading-relaxed">
+                    <strong className="text-green-700">اقتباس:</strong> "ليس المهم عدد المرات التي تسقط فيها، بل عدد المرات التي تنهض فيها."
+                  </p>
+                </div>
+
+                <div className="bg-gray-50 p-6 rounded-xl shadow-md">
+                  <h3 className="text-2xl font-semibold text-gray-800 mb-4">مصطلحات تداول أساسية يجب أن تعرفها</h3>
+                  <ul className="list-disc list-inside text-gray-700 leading-relaxed space-y-2 pr-4">
+                    <li><strong className="text-purple-700">الرصيد الافتراضي:</strong> المبلغ النقدي الافتراضي المتاح لك للتداول في هذه المنصة.</li>
+                    <li><strong className="text-purple-700">الأصل (Asset):</strong> أي شيء يتم تداوله، مثل سهم، عملة، سلعة، أو عملة رقمية.</li>
+                    <li><strong className="text-purple-700">سعر الشراء (Bid Price):</strong> السعر الذي يمكنك عنده بيع الأصل (السعر الذي يرغب المشترون في دفعه).</li>
+                    <li><strong className="text-purple-700">سعر البيع (Ask Price):</strong> السعر الذي يمكنك عنده شراء الأصل (السعر الذي يرغب البائعون في بيعه).</li>
+                    <li><strong className="text-purple-700">الفرق السعري (Spread):</strong> الفرق بين سعر الشراء وسعر البيع. هذا هو جزء من تكلفة التداول.</li>
+                    <li><strong className="text-purple-700">الربح المحقق (Realized Profit/Loss):</strong> الربح أو الخسارة التي تتحقق بعد إغلاق الصفقة بالكامل.</li>
+                    <li><strong className="text-purple-700">الربح غير المحقق (Unrealized Profit/Loss):</strong> الربح أو الخسارة الحالية لصفقة لا تزال مفتوحة (تتغير مع تغير السعر).</li>
+                    <li><strong className="text-purple-700">المحفظة (Portfolio):</strong> مجموع كل الأصول التي تمتلكها (سواء نقدية أو في شكل أصول مفتوحة).</li>
+                    <li><strong className="text-purple-700">الرافعة المالية (Leverage):</strong> أداة تسمح لك بالتداول بمبالغ أكبر من رأس مالك الفعلي، ولكنها تزيد المخاطر بشكل كبير. لا ينصح بها للمبتدئين إلا بعد فهم كامل لمخاطرها.</li>
+                    <li><strong className="text-purple-700">التقلب (Volatility):</strong> مدى سرعة وكبر تغير سعر الأصل. الأصول ذات التقلب العالي تحمل مخاطر وفرص أكبر.</li>
+                    <li><strong className="text-purple-700">النقطة (Pip):</strong> وحدة قياس حركة السعر في أزواج العملات (الفوركس). كل حركة صغيرة في السعر تقاس بالبيبات، وتؤثر بشكل مباشر على الربح أو الخسارة.</li>
+                  </ul>
+                  <div className="bg-purple-50 border-r-4 border-purple-500 text-purple-800 p-4 rounded-lg mt-6" role="alert">
+                    <p className="font-bold">تذكر:</p>
+                    <p className="text-sm mt-2">فهم هذه المصطلحات هو أساس فهمك للتداول. لا تخف من العودة إليها مراراً حتى تترسخ في ذهنك.</p>
+                  </div>
+                </div>
+              </div>
+            );
+          };
+    </script>
+
+    <script type="text/babel">
+        // Render the App component into the 'root' div
+        // هذه هي النقطة التي يتم فيها عرض تطبيق React في صفحة HTML
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
 
